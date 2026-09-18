@@ -28,6 +28,10 @@ __all__ = [
     "RigidPatch",
     "SoftTerrain",
     "SoftTerrainVisual",
+    "randome_obs",
+    "mid360_lidar_ranges",
+    "d435_depth",
+    "d435_rgb"
 ]
 
 from .curriculums import terrain_density_levels, terrain_friction_levels, terrain_stiffness_levels
@@ -46,6 +50,10 @@ from .observations import (
     foot_contact_hybrid,
     terrain_material_parameters_all_hybrid,
     terrain_material_parameters_hybrid,
+    randome_obs,
+    mid360_lidar_ranges,
+    d435_depth,
+    d435_rgb
 )
 from .rewards import (
     feet_air_time_positive_biped_hybrid,

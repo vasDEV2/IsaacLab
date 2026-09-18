@@ -18,7 +18,7 @@ VISUALIZER = "newton_gl"
 # VISUALIZER = "newton_rtx"
 # VISUALIZER = "kit"
 
-
+ 
 @configclass
 class G1FlatEnvCfg(G1RoughEnvCfg):
     def __post_init__(self):

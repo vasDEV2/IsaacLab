@@ -87,7 +87,7 @@ class PolicyCfg(ObsGroup):
             ),
         },
     )
-    joint_vel = ObsTerm(
+    joint_vellllllllllllllll = ObsTerm(
         func=mdp.joint_vel_rel,
         noise=Unoise(n_min=-1.5, n_max=1.5),
         params={
@@ -99,7 +99,22 @@ class PolicyCfg(ObsGroup):
         },
         scale=0.05,
     )
-    actions = ObsTerm(func=mdp.last_action)
+    actionssssssssssss = ObsTerm(func=mdp.last_action)
+    # lidar = ObsTerm(
+    #         func=g1_soft_mdp.mid360_lidar_ranges,
+    #         params={"sensor_cfg": SceneEntityCfg("mid360_lidar")},
+    #         clip=(0.0, 40.0),  # matches sensor max_distance
+    #     )
+
+    # rgb = ObsTerm(
+    #         func=g1_soft_mdp.d435_rgb,
+    #         params={"sensor_cfg": SceneEntityCfg("d435_camera")},
+    #     )
+    # depth = ObsTerm(
+    #     func=g1_soft_mdp.d435_depth,
+    #     params={"sensor_cfg": SceneEntityCfg("d435_camera"), "clip_max": 10.0},
+    # )
+    
     height_scan = ObsTerm(
         func=mdp.height_scan,
         params={"sensor_cfg": SceneEntityCfg("height_scanner")},
@@ -149,6 +164,7 @@ class CriticCfg(ObsGroup):
         scale=0.05,
     )
     actions = ObsTerm(func=mdp.last_action)
+    
     height_scan = ObsTerm(
         func=mdp.height_scan,
         params={"sensor_cfg": SceneEntityCfg("height_scanner")},
@@ -261,7 +277,7 @@ class LoggingObsCfg(ObsGroup):
         self.enable_corruption = False
         self.concatenate_terms = True
 
-
+ 
 @configclass
 class G1ObservationsCfg:
     """Observation specifications for the MDP."""

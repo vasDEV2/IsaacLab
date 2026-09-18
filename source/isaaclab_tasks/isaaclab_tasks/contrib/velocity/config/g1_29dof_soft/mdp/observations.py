@@ -19,7 +19,9 @@ import warp as wp
 import isaaclab.utils.math as math_utils
 from isaaclab.assets import Articulation
 from isaaclab.managers import SceneEntityCfg
-from isaaclab.sensors import ContactSensor
+from isaaclab.sensors import ContactSensor, Camera
+from isaaclab_newton.sensors import NewtonRaycastSensor
+# from isaaclab.sensors import Camera
 
 if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedEnv, ManagerBasedRLEnv
@@ -69,6 +71,48 @@ def foot_contact_hybrid(
     soft_contact = (torch.norm(soft_contact_forces, dim=-1) > soft_force_threshold).float()
 
     return torch.where(soft_contact_sensor.data.is_sensor_active, soft_contact, rigid_contact)
+
+def randome_obs(env: ManagerBasedRLEnv):
+    return torch.ones((env.num_envs, 10))
+
+def mid360_lidar_ranges(
+    env: ManagerBasedRLEnv,
+    sensor_cfg: SceneEntityCfg = SceneEntityCfg("mid360_lidar"),
+) -> torch.Tensor:
+    """Flattened range readings from the Mid-360 ray caster, shape (num_envs, num_rays)."""
+    sensor: NewtonRaycastSensor = env.scene.sensors[sensor_cfg.name]
+    distances = sensor.data.ray_distances  # (N, B), inf where no hit
+    # replace misses with max range so the obs stays finite/bounded
+    distances = torch.nan_to_num(distances, posinf=sensor.cfg.max_distance)
+    distances = torch.clamp(distances, max=sensor.cfg.max_distance)
+    return distances
+
+
+def d435_rgb(
+    env: ManagerBasedRLEnv,
+    sensor_cfg: SceneEntityCfg = SceneEntityCfg("d435_camera"),
+    normalize: bool = True,
+) -> torch.Tensor:
+    """RGB image from the D435, shape (num_envs, H, W, 3)."""
+    sensor: Camera = env.scene.sensors[sensor_cfg.name]
+    rgb = sensor.data.output["rgb"][..., :3].clone()
+    if normalize:
+        rgb = rgb.float() / 255.0
+    return rgb
+
+
+def d435_depth(
+    env: ManagerBasedRLEnv,
+    sensor_cfg: SceneEntityCfg = SceneEntityCfg("d435_camera"),
+    clip_max: float = 10.0,
+) -> torch.Tensor:
+    """Depth image from the D435 (meters), shape (num_envs, H, W, 1)."""
+    sensor: Camera = env.scene.sensors[sensor_cfg.name]
+    depth = sensor.data.output["depth"].clone()
+    # replace inf/NaN misses (rays that hit nothing) with max range
+    depth = torch.nan_to_num(depth, posinf=clip_max, nan=clip_max)
+    depth = torch.clamp(depth, max=clip_max)
+    return depth
 
 
 def foot_contact_forces_hybrid(
@@ -253,3 +297,4 @@ def terrain_material_parameters_hybrid(
         # return sigma_flat/sigma_cone_rigid
     else:
         raise ValueError(f"Unsupported backend: {term.backend}")
+ 

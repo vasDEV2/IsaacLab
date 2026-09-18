@@ -183,6 +183,8 @@ class ObservationManager(ManagerBase):
                 terms.append((group_name + "-" + name, term.cpu().tolist()))
                 idx += shape[concat_dim]
 
+        # print(type(terms))
+
         return terms
 
     """
@@ -334,6 +336,7 @@ class ObservationManager(ManagerBase):
         obs_buffer = dict()
         # iterate over all the terms in each group
         for group_name in self._group_obs_term_names:
+            # print(group_name)
             obs_buffer[group_name] = self.compute_group(group_name, update_history=update_history)
         # otherwise return a dict with observations of all groups
 
@@ -387,12 +390,19 @@ class ObservationManager(ManagerBase):
         # buffer to store obs per group
         group_obs = dict.fromkeys(group_term_names, None)
         # read attributes for each term
+        # print(group_term_names)
         obs_terms = zip(group_term_names, self._group_obs_term_cfgs[group_name])
+
+        # print(obs_terms)
 
         # evaluate terms: compute, add noise, clip, scale, custom modifiers
         for term_name, term_cfg in obs_terms:
+            if group_name == 'policy':
+                print(term_name) 
             # compute term's value
             obs: torch.Tensor = term_cfg.func(self._env, **term_cfg.params).clone()
+            if group_name == 'policy':
+                print(obs.shape)
             # apply post-processing
             if term_cfg.modifiers is not None:
                 for modifier in term_cfg.modifiers:
@@ -491,10 +501,12 @@ class ObservationManager(ManagerBase):
         # check if config is dict already
         if isinstance(self.cfg, dict):
             group_cfg_items = self.cfg.items()
+            print(group_cfg_items)
         else:
             group_cfg_items = self.cfg.__dict__.items()
         # iterate over all the groups
         for group_name, group_cfg in group_cfg_items:
+            print(group_name)
             # check for non config
             if group_cfg is None:
                 continue
@@ -525,8 +537,13 @@ class ObservationManager(ManagerBase):
                 term_cfg_items = group_cfg.items()
             else:
                 term_cfg_items = group_cfg.__dict__.items()
+            print(term_cfg_items)
             # iterate over all the terms in each group
             for term_name, term_cfg in term_cfg_items:
+                print(
+                    f"REGISTERING OBS TERM: {group_name}/{term_name}",
+                    flush=True,
+)
                 # skip non-obs settings
                 if term_name in [
                     "enable_corruption",

@@ -363,7 +363,7 @@ class ActionManager(ManagerBase):
         # nothing to log here
         return {}
 
-    def process_action(self, action: torch.Tensor):
+    def     process_action(self, action: torch.Tensor):
         """Processes the actions sent to the environment.
 
         Note:

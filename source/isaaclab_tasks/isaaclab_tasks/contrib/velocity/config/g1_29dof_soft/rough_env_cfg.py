@@ -11,7 +11,7 @@ from isaaclab.sim import SimulationCfg
 from isaaclab.utils.configclass import configclass
 
 from isaaclab_tasks.core.velocity.velocity_env_cfg import LocomotionVelocityRoughEnvCfg
-
+ 
 ##
 # Pre-defined configs
 ##
