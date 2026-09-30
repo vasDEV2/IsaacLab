@@ -82,3 +82,26 @@ def test_raw_contact_logging_preserves_flat_shape():
     )
     result = foot_contact_forces_raw_hybrid(env)
     torch.testing.assert_close(result, torch.tensor([[1.0, 1.0, 1.0, 3.0, 4.0, 5.0], [6.0, 7.0, 8.0, 1.0, 1.0, 1.0]]))
+
+
+def test_effective_flat_and_play_defaults_and_reward_action_partitions():
+    from isaaclab_tasks.contrib.velocity.config.g1_29dof_soft.flat_env_cfg import G1FlatEnvCfg, G1FlatEnvCfg_PLAY
+
+    train = G1FlatEnvCfg()
+    play = G1FlatEnvCfg_PLAY()
+    assert train.scene.num_envs == 4096
+    assert train.sim.dt == 0.005 and train.decimation == 4
+    assert train.events.add_base_mass.params["mass_distribution_params"] == (-1.0, 3.0)
+    assert train.events.reset_base.params["pose_range"]["yaw"] == (-torch.pi, torch.pi)
+    assert set(train.events.reset_base.params["velocity_range"].values()) == {(0.0, 0.0)}
+    lower = train.rewards.action_rate_l2_lower_body.params["joint_idx"]
+    upper = train.rewards.action_rate_l2_upper_body.params["joint_idx"]
+    names = train.actions.joint_pos.joint_names
+    assert set(lower).isdisjoint(upper)
+    assert sorted(lower + upper) == list(range(len(names)))
+    assert all(any(part in names[i] for part in ("_hip_", "_knee_", "_ankle_")) for i in lower)
+    assert train.rewards.no_fly.params["soft_contact_threshold"] == train.actions.physics_callback.contact_threshold
+    assert play.scene.num_envs == 50 and play.episode_length_s == 10.0
+    assert play.events.push_robot is None
+    assert not play.observations.policy.enable_corruption
+    assert train.scene.terrain is not G1FlatEnvCfg().scene.terrain

@@ -3,42 +3,11 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
-from isaaclab.utils.configclass import configclass
 
-import isaaclab_tasks.contrib.velocity.config.g1_29dof_rigid.mdp as g1_mdp
-import isaaclab_tasks.core.velocity.mdp as mdp
+"""Compatibility imports; edit experiment defaults in env_cfg/experiment_cfg.py."""
 
+from .experiment_cfg import (
+    G1CommandsCfg,
+)
 
-@configclass
-class G1CommandsCfg:
-    """Command specifications for the MDP."""
-
-    # lin vel and ang vel tracking
-    # base_velocity = mdp.UniformLevelVelocityCommandCfg(
-    #     asset_name="robot",
-    #     resampling_time_range=(10.0, 10.0),
-    #     rel_standing_envs=0.2,
-    #     rel_heading_envs=1.0,
-    #     heading_command=True,
-    #     heading_control_stiffness=0.5,
-    #     debug_vis=True,
-    #     ranges=mdp.UniformLevelVelocityCommandCfg.Ranges(
-    #         lin_vel_x=(-1.0, 1.0), lin_vel_y=(-0.5, 0.5), ang_vel_z=(-1.0, 1.0), heading=(-3.14, 3.14)
-    #     ),
-    # )
-
-    # lin vel, ang vel, yaw tracking
-    base_velocity = g1_mdp.UniformVelocityYawCommandCfg(
-        asset_name="robot",
-        resampling_time_range=(10.0, 10.0),
-        rel_standing_envs=0.2,
-        rel_heading_envs=1.0,
-        heading_command=False,
-        heading_control_stiffness=0.5,
-        debug_vis=True,
-        ranges=g1_mdp.UniformVelocityYawCommandCfg.Ranges(
-            lin_vel_x=(-1.0, 1.0),
-            lin_vel_y=(-0.5, 0.5),
-            ang_vel_z=(-1.0, 1.0),
-        ),
-    )
+__all__ = ["G1CommandsCfg"]
