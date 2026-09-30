@@ -42,3 +42,43 @@ def test_perception_clipping_tracks_live_sensor_limits(limit):
     torch.testing.assert_close(mid360_lidar_ranges(env), expected)
     torch.testing.assert_close(d435_depth(env).flatten(1), expected)
     torch.testing.assert_close(d435_depth(env, clip_max=2.0).flatten(1), torch.tensor([[1.0, 2.0, 2.0, 2.0]]))
+
+
+def test_joint_action_order_and_observation_defaults():
+    from isaaclab_tasks.contrib.velocity.config.g1_29dof_soft.env_cfg.experiment_cfg import (
+        ACTIVE_JOINT,
+        SOFT_CONTACT_THRESHOLD,
+        G1ActionsCfg,
+        G1ObservationsCfg,
+    )
+
+    actions = G1ActionsCfg()
+    observations = G1ObservationsCfg()
+    assert len(ACTIVE_JOINT) == len(set(ACTIVE_JOINT)) == 29
+    assert actions.joint_pos.joint_names == ACTIVE_JOINT
+    assert actions.joint_pos.scale == 0.25
+    for group in (observations.policy, observations.critic):
+        assert group.joint_pos.params["asset_cfg"].joint_names == ACTIVE_JOINT
+        assert group.joint_vel.params["asset_cfg"].joint_names == ACTIVE_JOINT
+        assert group.history_length == 10
+    assert observations.privileged.foot_contact.params["soft_force_threshold"] == SOFT_CONTACT_THRESHOLD
+    assert actions.physics_callback.contact_threshold == SOFT_CONTACT_THRESHOLD
+
+
+def test_raw_contact_logging_preserves_flat_shape():
+    from isaaclab_tasks.contrib.velocity.config.g1_29dof_soft.mdp.observations import foot_contact_forces_raw_hybrid
+
+    rigid = torch.arange(12.0).reshape(2, 2, 3)
+    soft = torch.ones(2, 2, 6)
+    solver = SimpleNamespace(
+        contact_wrench=soft, data=SimpleNamespace(is_sensor_active=torch.tensor([[True, False], [False, True]]))
+    )
+    env = SimpleNamespace(
+        num_envs=2,
+        scene=SimpleNamespace(
+            sensors={"contact_forces": SimpleNamespace(data=SimpleNamespace(net_forces_w=SimpleNamespace(torch=rigid)))}
+        ),
+        action_manager=SimpleNamespace(get_term=lambda name: SimpleNamespace(contact_solver=solver)),
+    )
+    result = foot_contact_forces_raw_hybrid(env)
+    torch.testing.assert_close(result, torch.tensor([[1.0, 1.0, 1.0, 3.0, 4.0, 5.0], [6.0, 7.0, 8.0, 1.0, 1.0, 1.0]]))

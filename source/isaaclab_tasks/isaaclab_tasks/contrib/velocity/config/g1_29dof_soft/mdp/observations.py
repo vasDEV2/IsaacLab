@@ -172,7 +172,7 @@ def foot_contact_forces_raw_hybrid(
 
     forces = torch.where(is_soft.unsqueeze(-1), soft_contact_forces, rigid_contact_forces)
 
-    return forces
+    return forces.reshape(env.num_envs, -1)
 
 
 _SHAPE_ID_CACHE: dict[tuple[str, str], torch.Tensor] = {}
