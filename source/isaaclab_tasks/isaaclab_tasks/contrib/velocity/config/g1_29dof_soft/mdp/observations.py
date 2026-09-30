@@ -15,16 +15,16 @@ from typing import TYPE_CHECKING
 
 import torch
 import warp as wp
+from isaaclab_newton.sensors import NewtonRaycastSensor
 
-import isaaclab.utils.math as math_utils
 from isaaclab.assets import Articulation
 from isaaclab.managers import SceneEntityCfg
-from isaaclab.sensors import ContactSensor, Camera
-from isaaclab_newton.sensors import NewtonRaycastSensor
+from isaaclab.sensors import Camera, ContactSensor
+
 # from isaaclab.sensors import Camera
 
 if TYPE_CHECKING:
-    from isaaclab.envs import ManagerBasedEnv, ManagerBasedRLEnv
+    from isaaclab.envs import ManagerBasedRLEnv
 
 from isaaclab.envs.utils.io_descriptors import (
     generic_io_descriptor,
@@ -72,19 +72,23 @@ def foot_contact_hybrid(
 
     return torch.where(soft_contact_sensor.data.is_sensor_active, soft_contact, rigid_contact)
 
+
 def randome_obs(env: ManagerBasedRLEnv):
     return torch.ones((env.num_envs, 10))
+
 
 def mid360_lidar_ranges(
     env: ManagerBasedRLEnv,
     sensor_cfg: SceneEntityCfg = SceneEntityCfg("mid360_lidar"),
+    clip_max: float | None = None,
 ) -> torch.Tensor:
-    """Flattened range readings from the Mid-360 ray caster, shape (num_envs, num_rays)."""
+    """Return ranges [m], shape (num_envs, num_rays); clip_max [m] defaults to sensor range."""
     sensor: NewtonRaycastSensor = env.scene.sensors[sensor_cfg.name]
     distances = sensor.data.ray_distances  # (N, B), inf where no hit
-    # replace misses with max range so the obs stays finite/bounded
-    distances = torch.nan_to_num(distances, posinf=sensor.cfg.max_distance)
-    distances = torch.clamp(distances, max=sensor.cfg.max_distance)
+    max_distance = sensor.cfg.max_distance if clip_max is None else clip_max
+    # Misses use the configured range; changing the sensor also changes preprocessing.
+    distances = torch.nan_to_num(distances, nan=max_distance, posinf=max_distance, neginf=0.0)
+    distances = torch.clamp(distances, min=0.0, max=max_distance)
     return distances
 
 
@@ -104,10 +108,12 @@ def d435_rgb(
 def d435_depth(
     env: ManagerBasedRLEnv,
     sensor_cfg: SceneEntityCfg = SceneEntityCfg("d435_camera"),
-    clip_max: float = 10.0,
+    clip_max: float | None = None,
 ) -> torch.Tensor:
-    """Depth image from the D435 (meters), shape (num_envs, H, W, 1)."""
+    """Return depth [m], shape (num_envs, H, W, 1); clip_max [m] defaults to the camera far plane."""
     sensor: Camera = env.scene.sensors[sensor_cfg.name]
+    if clip_max is None:
+        clip_max = sensor.cfg.spawn.clipping_range[1]
     depth = sensor.data.output["depth"].clone()
     # replace inf/NaN misses (rays that hit nothing) with max range
     depth = torch.nan_to_num(depth, posinf=clip_max, nan=clip_max)
@@ -165,15 +171,6 @@ def foot_contact_forces_raw_hybrid(
     is_soft = soft_contact_sensor.data.is_sensor_active  # [B, N_feet]
 
     forces = torch.where(is_soft.unsqueeze(-1), soft_contact_forces, rigid_contact_forces)
-
-    threshold = (
-        torch.where(is_soft, soft_force_filter_threshold, rigid_force_filter_threshold)
-        .unsqueeze(-1)
-        .expand(-1, -1, 3)
-        .reshape(env.num_envs, -1)
-    )
-    forces = forces.reshape(env.num_envs, -1)
-    # forces = forces * (forces > threshold).float()
 
     return forces
 
@@ -236,12 +233,6 @@ def terrain_material_parameters_all_hybrid(
     rho_c = soft_contact_sensor.terrain_density * on_soft_ground + (1 - on_soft_ground) * rho_c_rigid
     mu_int = soft_contact_sensor.terrain_stiffness * on_soft_ground + (1 - on_soft_ground) * mu_rigid
 
-    # NOTE: since both rho_c and mu_int affect stiffness, we use media dependent scaling factor as observation
-    g = 9.81
-    xi = rho_c * g * (894.0 * (mu_int**3.0) - 386.0 * (mu_int**2.0) + 89.0 * mu_int)
-    xi_max = rho_c_max * g * (894.0 * (mu_rigid**3.0) - 386.0 * (mu_rigid**2.0) + 89.0 * mu_rigid)
-    stiffness = xi / xi_max  # normalize
-
     return torch.stack([friction_coef, rho_c / rho_c_max, mu_int], dim=-1)
 
 
@@ -297,4 +288,3 @@ def terrain_material_parameters_hybrid(
         # return sigma_flat/sigma_cone_rigid
     else:
         raise ValueError(f"Unsupported backend: {term.backend}")
- 
