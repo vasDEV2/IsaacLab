@@ -12,7 +12,8 @@ from isaaclab_visualizers.newton import NewtonGLVisualizerCfg, NewtonRTXVisualiz
 from isaaclab.utils.configclass import configclass
 
 from . import mdp
-from .rough_env_cfg import G1RoughEnvCfg
+from .rough_env_cfg import G1RoughEnvCfg, G1RoughEnvCfgPerception
+from isaaclab_tasks.contrib.velocity.config.g1_29dof_soft.env_cfg.perception_env.scene_cfg import STAIRS_TERRAINS_CFG
 
 VISUALIZER = "newton_gl"
 # VISUALIZER = "newton_rtx"
@@ -65,6 +66,8 @@ class G1FlatEnvCfg(G1RoughEnvCfg):
 
         # disable for non rough terrain
         self.terminations.terrain_out_of_bounds = None  # type: ignore
+
+        
 
 
 class G1FlatEnvCfg_PLAY(G1FlatEnvCfg):
@@ -144,3 +147,52 @@ class G1FlatEnvCfg_PLAY(G1FlatEnvCfg):
             ]
 
             self.video_recorders = []
+
+@configclass
+class G1FlatEnvCfgPerception(G1RoughEnvCfgPerception):
+    def __post_init__(self):
+        # post init of parent
+        super().__post_init__()
+
+        # Optionally override physics speed
+        self.sim.dt = 0.005  # 200Hz
+        self.decimation = 4  # 50Hz
+        self.sim.render_interval = self.decimation
+
+        # make curriculum soft terrain
+        self.scene.terrain = mdp.CurriculumSoftTerrain
+        # self.scene.terrain = mdp.CurriculumSoftTerrain.replace(terrain_generator=STAIRS_TERRAINS_CFG)
+
+        # no height scan
+        self.scene.height_scanner = None  # type: ignore
+        self.observations.policy.height_scan = None  # type: ignore
+        self.observations.critic.height_scan = None  # type: ignore
+
+        # edit randomization
+        self.events.add_base_mass.params["mass_distribution_params"] = (-1.0, 3.0)
+        self.events.reset_base.params = {
+            "pose_range": {
+                "x": (-0.5, 0.5),
+                "y": (-0.5, 0.5),
+                "yaw": (-math.pi, math.pi),
+            },
+            "velocity_range": {
+                "x": (0.0, 0.0),
+                "y": (0.0, 0.0),
+                "z": (0.0, 0.0),
+                "roll": (0.0, 0.0),
+                "pitch": (0.0, 0.0),
+                "yaw": (0.0, 0.0),
+            },
+        }
+        self.events.reset_robot_joints.params["position_range"] = (0.5, 1.5)
+
+        # edit command range
+        self.commands.base_velocity.ranges.lin_vel_x = (-1.0, 1.5)
+        self.commands.base_velocity.ranges.lin_vel_y = (-0.5, 0.5)
+        self.commands.base_velocity.ranges.ang_vel_z = (-1.0, 1.0)
+        self.commands.base_velocity.ranges.heading = (-math.pi, math.pi)
+
+        # disable for non rough terrain
+        self.terminations.terrain_out_of_bounds = None  # type: ignore
+

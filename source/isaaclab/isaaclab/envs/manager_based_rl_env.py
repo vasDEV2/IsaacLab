@@ -306,7 +306,7 @@ class ManagerBasedRLEnv(ManagerBasedEnv, gym.Env):
 
         # print(self.obs_buf.shape)
 
-        print(self.obs_buf['policy'].shape)
+        # print(self.obs_buf['policy'].shape)
 
         # return observations, rewards, resets and extras
         return self.obs_buf, self.reward_buf, self.reset_terminated, self.reset_time_outs, self.extras

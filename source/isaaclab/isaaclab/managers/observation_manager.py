@@ -397,12 +397,12 @@ class ObservationManager(ManagerBase):
 
         # evaluate terms: compute, add noise, clip, scale, custom modifiers
         for term_name, term_cfg in obs_terms:
-            if group_name == 'policy':
-                print(term_name) 
+            # if group_name == 'policy':
+                # print(term_name) 
             # compute term's value
             obs: torch.Tensor = term_cfg.func(self._env, **term_cfg.params).clone()
-            if group_name == 'policy':
-                print(obs.shape)
+            # if group_name == 'policy':
+                # print(obs.shape)
             # apply post-processing
             if term_cfg.modifiers is not None:
                 for modifier in term_cfg.modifiers:
