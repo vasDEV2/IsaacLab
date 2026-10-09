@@ -67,6 +67,12 @@ class _PointNetEncoder(nn.Module):
         # (rather than nn.Conv1d) to keep TorchScript/ONNX export simple.
         self.point_mlp = nn.Sequential(*layers)
 
+    #     print(
+    #     f"[CUSTOM ACTOR ACTIVE] {type(self).__module__}.{type(self).__name__} "
+    #     f"obs_dim={self.obs_dim}, num_points={self.num_points}, point_dim={self.point_dim}"
+    # )
+        print(self)
+
     def forward(self, points: torch.Tensor) -> torch.Tensor:
         # points: (B, N, point_dim)
         b, n, d = points.shape
@@ -141,6 +147,11 @@ class PointNetMLPModel(MLPModel):
             feature_dim=self._pointnet_feature_dim,
             activation=self._pointnet_activation,
         )
+        # print(
+        #     f"[CUSTOM ACTOR ACTIVE] {type(self).__module__}.{type(self).__name__} "
+        #     f"obs_dim={self.obs_dim}, num_points={self.num_points}, point_dim={self.point_dim}"
+        # )
+        # print(self)
 
     # ------------------------------------------------------------------ #
     # Only these two are overridden; forward(), reset(), get_hidden_state(),

@@ -25,6 +25,17 @@ from .env_cfg import (
     G1SceneCfg,
     G1TerminationsCfg,
 )
+from .env_cfg.perception_env import (
+    G1ActionsCfgPerception,
+    G1CommandsCfgPerception,
+    G1CurriculumCfgPerception,
+    G1EventCfgPerception,
+    G1ObservationsCfgPerception,
+    G1PhysicsCfgPerception,
+    G1RewardsCfgPerception,
+    G1SceneCfgPerception,
+    G1TerminationsCfgPerception,
+)
 
 VISUALIZER = "newton_gl"
 # VISUALIZER = "newton_rtx"
@@ -37,7 +48,7 @@ class G1RoughEnvCfg(LocomotionVelocityRoughEnvCfg):
     rewards: G1RewardsCfg = G1RewardsCfg()
     actions: G1ActionsCfg = G1ActionsCfg()
     observations: G1ObservationsCfg = G1ObservationsCfg()
-    scene: G1SceneCfg = G1SceneCfg(num_envs=4096, env_spacing=2.5)
+    scene: G1SceneCfg = G1SceneCfg(num_envs=4096, env_spacing=1.0)
     terminations: G1TerminationsCfg = G1TerminationsCfg()
     curriculum: G1CurriculumCfg = G1CurriculumCfg()
     events: G1EventCfg = G1EventCfg()
@@ -68,7 +79,7 @@ class G1RoughEnvCfg(LocomotionVelocityRoughEnvCfg):
 
         if VISUALIZER == "newton_gl":
             self.sim.visualizer_cfgs = [
-                NewtonGLVisualizerCfg(eye=(12.0, 0.0, 6.0), headless=True),
+                NewtonGLVisualizerCfg(eye=(12.0, 0.0, 6.0), headless=False),
             ]
 
             self.video_recorders = [
@@ -127,3 +138,60 @@ class G1RoughEnvCfg_PLAY(G1RoughEnvCfg):
         # remove random pushing
         # self.events.base_external_force_torque = None
         self.events.push_robot = None  # type: ignore
+
+
+@configclass
+class G1RoughEnvCfgPerception(LocomotionVelocityRoughEnvCfg):
+    sim: SimulationCfg = SimulationCfg(physics=G1PhysicsCfgPerception())  # type: ignore
+    rewards: G1RewardsCfgPerception = G1RewardsCfgPerception()
+    actions: G1ActionsCfgPerception = G1ActionsCfgPerception()
+    observations: G1ObservationsCfgPerception = G1ObservationsCfgPerception()
+    scene: G1SceneCfgPerception = G1SceneCfgPerception(num_envs=4096, env_spacing=2.5)
+    terminations: G1TerminationsCfgPerception = G1TerminationsCfgPerception()
+    curriculum: G1CurriculumCfgPerception = G1CurriculumCfgPerception()
+    events: G1EventCfgPerception = G1EventCfgPerception()
+    commands: G1CommandsCfgPerception = G1CommandsCfgPerception()
+    seed: int = 42
+
+    def __post_init__(self):
+        super().__post_init__()
+
+        self.events.reset_base.params = {
+            "pose_range": {"x": (-0.5, 0.5), "y": (-0.5, 0.5), "yaw": (-3.14, 3.14)},
+            "velocity_range": {
+                "x": (0.0, 0.0),
+                "y": (0.0, 0.0),
+                "z": (0.0, 0.0),
+                "roll": (0.0, 0.0),
+                "pitch": (0.0, 0.0),
+                "yaw": (0.0, 0.0),
+            },
+        }
+
+        if VISUALIZER == "newton_gl":
+            self.sim.visualizer_cfgs = [
+                NewtonGLVisualizerCfg(eye=(12.0, 0.0, 6.0), headless=False),
+            ]
+            self.video_recorders = [
+                VideoRecorderCfg(
+                    source="visualizer:newton_gl", output_dir="videos/", video_length=200, video_interval=2000
+                ),
+            ]
+        elif VISUALIZER == "newton_rtx":
+            self.sim.visualizer_cfgs = [
+                NewtonRTXVisualizerCfg(eye=(12.0, 0.0, 6.0), headless=False),
+            ]
+            self.video_recorders = [
+                VideoRecorderCfg(
+                    source="visualizer:newton_rtx", output_dir="videos/", video_length=200, video_interval=2000
+                ),
+            ]
+        elif VISUALIZER == "kit":
+            self.sim.visualizer_cfgs = [
+                KitVisualizerCfg(eye=(12.0, 0.0, 6.0), headless=True),
+            ]
+            self.video_recorders = [
+                VideoRecorderCfg(
+                    source="visualizer:kit", output_dir="videos/", video_length=200, video_interval=2000
+                ),
+            ]

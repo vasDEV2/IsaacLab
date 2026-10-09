@@ -1,0 +1,318 @@
+# Copyright (c) 2022-2026, The Isaac Lab Project Developers (https://github.com/isaac-sim/IsaacLab/blob/main/CONTRIBUTORS.md).
+# All rights reserved.
+#
+# SPDX-License-Identifier: BSD-3-Clause
+
+import isaaclab.sim as sim_utils
+from isaaclab.assets import ArticulationCfg, AssetBaseCfg
+from isaaclab.scene import InteractiveSceneCfg
+from isaaclab.sensors import ContactSensorCfg, RayCasterCfg, patterns, CameraCfg
+import isaaclab.terrains as terrain_gen
+from isaaclab.terrains import TerrainImporterCfg, TerrainGeneratorCfg
+from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR, ISAACLAB_NUCLEUS_DIR
+from isaaclab.utils.configclass import configclass
+from isaaclab_newton.sensors import NewtonRaycastSensorCfg
+from isaaclab_newton.renderers import NewtonWarpRendererCfg
+
+from isaaclab.terrains.height_field.hf_terrains_cfg import HfTerrainBaseCfg
+from isaaclab.terrains.height_field.utils import height_field_to_mesh
+import numpy as np
+
+##
+# Pre-defined configs
+##
+from isaaclab_assets import UNITREE_G1_29DOF_CFG
+
+from isaaclab.terrains.config.rough import ROUGH_TERRAINS_CFG  # isort: skip
+
+@height_field_to_mesh
+def stairs_wave_terrain(difficulty: float, cfg: "HfStairsWaveCfg") -> np.ndarray:
+    """Flat pad at the tile center, then stairs going down and back up, repeating outward in +/-x."""
+    step_h = cfg.step_height_range[0] + difficulty * (cfg.step_height_range[1] - cfg.step_height_range[0])
+    w = int(round(cfg.step_width / cfg.horizontal_scale))        # pixels per step
+    pad = int(round(cfg.pad_length / cfg.horizontal_scale))      # half-length of spawn pad (pixels)
+    nx = int(round(cfg.size[0] / cfg.horizontal_scale))
+    ny = int(round(cfg.size[1] / cfg.horizontal_scale))
+    L = cfg.steps_per_flight
+
+    d = np.abs(np.arange(nx) + 0.5 - nx / 2)                     # distance from tile center in x
+    n = np.where(d < pad, 0, np.floor((d - pad) / w).astype(int) + 1)  # step index (0 = pad)
+    m = n % (2 * L)
+    level = np.where(m <= L, m, 2 * L - m)                       # triangle wave: 0..L..0
+    heights = -level * step_h / cfg.vertical_scale               # negative = descend first, then climb
+
+    hf = np.tile(heights[:, None], (1, ny))
+    return np.rint(hf).astype(np.int16)
+
+
+@configclass
+class HfStairsWaveCfg(HfTerrainBaseCfg):
+    function = stairs_wave_terrain
+    step_height_range: tuple[float, float] = (0.08, 0.15)  # scaled by difficulty
+    step_width: float = 0.30
+    steps_per_flight: int = 4      # steps down (then the same number back up)
+    pad_length: float = 1.2        # half-length of the flat spawn area at the center
+
+
+MIXED_TERRAINS_CFG = TerrainGeneratorCfg(
+    size=(12.0, 8.0),              # 12 m = 2 * (1.2 pad + 2 cycles * 8 steps * 0.3), so edges return to z=0
+    border_width=20.0,
+    num_rows=20,
+    num_cols=20,                    # col 0 = flat, col 1 = stairs
+    horizontal_scale=0.1,
+    vertical_scale=0.005,
+    slope_threshold=0.75,
+    use_cache=False,
+    curriculum=True,               # assigns columns deterministically by proportion
+    # sub_terrains={
+    #     "flat": terrain_gen.MeshPlaneTerrainCfg(proportion=0.5),
+    #     "stairs": HfStairsWaveCfg(proportion=0.5),
+    # }
+    sub_terrains={
+        "stairs_left": HfStairsWaveCfg(proportion=0.2),
+        "plane_middle": terrain_gen.MeshPlaneTerrainCfg(proportion=0.8),
+        # "stairs_right": HfStairsWaveCfg(proportion=1.0 / 3.0),
+    },
+)
+# @configclass
+# class G1SceneCfg(InteractiveSceneCfg):
+#     """Configuration for the terrain scene with a legged robot."""
+
+#     # ground terrain
+#     terrain = TerrainImporterCfg(
+#         prim_path="/World/ground",
+#         terrain_type="generator",
+#         terrain_generator=ROUGH_TERRAINS_CFG,
+#         max_init_terrain_level=5,
+#         collision_group=-1,
+#         physics_material=sim_utils.RigidBodyMaterialCfg(
+#             friction_combine_mode="multiply",
+#             restitution_combine_mode="multiply",
+#             static_friction=1.0,
+#             dynamic_friction=1.0,
+#         ),
+#         visual_material=sim_utils.MdlFileCfg(
+#             mdl_path=f"{ISAACLAB_NUCLEUS_DIR}/Materials/TilesMarbleSpiderWhiteBrickBondHoned/TilesMarbleSpiderWhiteBrickBondHoned.mdl",
+#             project_uvw=True,
+#             texture_scale=(0.25, 0.25),
+#         ),
+#         debug_vis=False,
+#     )
+#     # Optional rigid floor at the center
+#     rigid_floor: TerrainImporterCfg = None  # type: ignore
+#     visual_terrain: TerrainImporterCfg = None  # type: ignore
+
+#     # robots
+#     robot: ArticulationCfg = UNITREE_G1_29DOF_CFG.replace(prim_path="{ENV_REGEX_NS}/Robot")  # type: ignore
+
+#     # sensors
+#     height_scanner = RayCasterCfg(
+#         # the URDF importer nests bodies along the kinematic tree, so match the leaf name anywhere
+#         prim_path="{ENV_REGEX_NS}/Robot/.*torso_link",
+#         offset=RayCasterCfg.OffsetCfg(pos=(0.0, 0.0, 20.0)),
+#         ray_alignment="yaw",
+#         pattern_cfg=patterns.GridPatternCfg(resolution=0.1, size=(1.6, 1.0)),
+#         debug_vis=False,
+#         mesh_prim_paths=["/World/ground"],
+#     )
+
+#     mid360_lidar = NewtonRaycastSensorCfg(
+#     prim_path="{ENV_REGEX_NS}/Robot/.*torso_link",   # your mounting link
+#     update_period=0.1,          # ~10 Hz, matching the real Mid-360 frame rate
+#     max_distance=40.0,          # Mid-360 max range spec
+#     ray_alignment="base",       # rays follow full 6-DoF body pose (rigidly mounted)
+#     global_world_only=False,    # also hit shapes in this env, not just shared terrain
+#     mesh_prim_paths=[],         # unused on Newton (ignored, but field must be set)
+#     offset=NewtonRaycastSensorCfg.OffsetCfg(
+#         pos=(0.0, 0.0, 0.0),
+#         rot=(0.0, 0.0, 0.0, 1.0),   # identity, (x, y, z, w) order in 3.0
+#     ),
+#     pattern_cfg=patterns.LidarPatternCfg(
+#         channels=40,                       # vertical "lines" approximating the non-repetitive scan
+#         vertical_fov_range=(-7.0, 52.0),   # Mid-360 spec: 59° vertical FOV
+#         horizontal_fov_range=(0.0, 360.0), # full 360° horizontal
+#         horizontal_res=1.0,                # tune for point density vs. compute cost
+#     ),
+#     debug_vis=True,
+# )
+#     # --- D435-like RGB-D camera, mounted on the robot ---
+#     d435_camera = CameraCfg(
+#         prim_path="{ENV_REGEX_NS}/Robot/d435_link/Camera",
+#         update_period=1 / 30,          # D435 default depth/RGB stream rate
+#         width=640,
+#         height=480,                    # matches common D435 depth stream (848x480 also common)
+#         data_types=["rgb", "depth"],   # only rgb/depth are supported by the Newton Warp renderer
+#         spawn=sim_utils.PinholeCameraCfg(
+#             focal_length=1.93,             # D435 RGB module focal length (mm)
+#             horizontal_aperture=3.68,      # sized to give ~69° horizontal FOV (RGB spec)
+#             clipping_range=(0.1, 10.0),    # D435 depth range spec (usable accuracy ~0.3-3 m)
+#         ),
+#         offset=CameraCfg.OffsetCfg(
+#             pos=(0.0, 0.0, 0.0),
+#             rot=(0.0, 0.0, 0.0, 1.0),      # identity, (x, y, z, w) order in 3.0
+#             convention="ros",              # +Z forward, -Y up — matches how D435 depth data is usually consumed
+#         ),
+#         renderer_cfg=NewtonWarpRendererCfg(),
+#     )
+#         # multi-body contact reporting
+#     contact_forces = ContactSensorCfg(
+#         prim_path="{ENV_REGEX_NS}/Robot/.*",
+#         history_length=3,
+#         track_air_time=True,
+#     )
+
+#     # lights
+#     sky_light = AssetBaseCfg(
+#         prim_path="/World/skyLight",
+#         spawn=sim_utils.DomeLightCfg(
+#             intensity=750.0,
+#             texture_file=f"{ISAAC_NUCLEUS_DIR}/Materials/Textures/Skies/PolyHaven/kloofendal_43d_clear_puresky_4k.hdr",
+#         ),
+#     )
+
+
+STAIRS_TERRAINS_CFG = TerrainGeneratorCfg(
+    size=(4.0, 4.0),
+    border_width=20.0,
+    num_rows=10,
+    num_cols=10,
+    horizontal_scale=0.1,
+    vertical_scale=0.005,
+    slope_threshold=0.75,
+    use_cache=False,
+    curriculum=False,
+    sub_terrains={
+        "pyramid_stairs": terrain_gen.MeshPyramidStairsTerrainCfg(
+            proportion=1.0,
+            step_height_range=(0.05, 0.1),
+            step_width=0.15,
+            platform_width=1.0,
+            border_width=1.0,
+        ),
+        # "plane": terrain_gen.MeshPlaneTerrainCfg(proportion=0.5),
+    },
+
+)
+ 
+ 
+@configclass
+class G1SceneCfg(InteractiveSceneCfg):
+    """Configuration for the stairs scene with a legged robot."""
+ 
+    # # ground terrain
+    # terrain = TerrainImporterCfg(
+    #     prim_path="/World/ground",
+    #     terrain_type="generator",
+    #     terrain_generator= ROUGH_TERRAINS_CFG,
+    #     max_init_terrain_level=0,  # only one row exists in STAIRS_TERRAINS_CFG
+    #     collision_group=-1,
+    #     physics_material=sim_utils.RigidBodyMaterialCfg(
+    #         friction_combine_mode="multiply",
+    #         restitution_combine_mode="multiply",
+    #         static_friction=1.0,
+    #         dynamic_friction=1.0,
+    #     ),
+    #     visual_material=sim_utils.MdlFileCfg(
+    #         mdl_path=(
+    #             f"{ISAACLAB_NUCLEUS_DIR}/Materials/TilesMarbleSpiderWhiteBrickBondHoned/"
+    #             "TilesMarbleSpiderWhiteBrickBondHoned.mdl"
+    #         ),
+    #         project_uvw=True,
+    #         texture_scale=(0.25, 0.25),
+    #     ),
+        # debug_vis=False,
+    # )
+    terrain = TerrainImporterCfg(
+        prim_path="/World/ground",
+        terrain_type="generator",
+        terrain_generator=STAIRS_TERRAINS_CFG,
+        max_init_terrain_level=19,
+        collision_group=-1,
+        physics_material=sim_utils.RigidBodyMaterialCfg(
+            friction_combine_mode="multiply",
+            restitution_combine_mode="multiply",
+            static_friction=1.0,
+            dynamic_friction=1.0,
+        ),
+        visual_material=sim_utils.MdlFileCfg(
+            mdl_path=(
+                f"{ISAACLAB_NUCLEUS_DIR}/Materials/TilesMarbleSpiderWhiteBrickBondHoned/"
+                "TilesMarbleSpiderWhiteBrickBondHoned.mdl"
+            ),
+            project_uvw=True,
+            texture_scale=(0.25, 0.25),
+        ),
+        debug_vis=False,
+    )
+    # Optional rigid floor at the center
+    rigid_floor: TerrainImporterCfg = None  # type: ignore
+    visual_terrain: TerrainImporterCfg = None  # type: ignore
+ 
+    # robots
+    robot: ArticulationCfg = UNITREE_G1_29DOF_CFG.replace(prim_path="{ENV_REGEX_NS}/Robot")  # type: ignore
+ 
+    # sensors
+    height_scanner = RayCasterCfg(
+        # the URDF importer nests bodies along the kinematic tree, so match the leaf name anywhere
+        prim_path="{ENV_REGEX_NS}/Robot/.*torso_link",
+        offset=RayCasterCfg.OffsetCfg(pos=(0.0, 0.0, 20.0)),
+        ray_alignment="yaw",
+        pattern_cfg=patterns.GridPatternCfg(resolution=0.1, size=(1.6, 1.0)),
+        debug_vis=False,
+        mesh_prim_paths=["/World/ground"],
+    )
+
+    mid360_lidar = NewtonRaycastSensorCfg(
+        prim_path="{ENV_REGEX_NS}/Robot/.*torso_link",   # your mounting link
+        update_period=0.1,          # ~10 Hz, matching the real Mid-360 frame rate
+        max_distance=40.0,          # Mid-360 max range spec
+        ray_alignment="base",       # rays follow full 6-DoF body pose (rigidly mounted)
+        global_world_only=False,    # also hit shapes in this env, not just shared terrain
+        mesh_prim_paths=[],         # unused on Newton (ignored, but field must be set)
+        offset=NewtonRaycastSensorCfg.OffsetCfg(
+            pos=(0.0, 0.0, 0.0),
+            rot=(0.0, 0.0, 0.0, 1.0),   # identity, (x, y, z, w) order in 3.0
+        ),
+        pattern_cfg=patterns.LidarPatternCfg(
+            channels=40,                       # vertical "lines" approximating the non-repetitive scan
+            vertical_fov_range=(-7.0, 52.0),   # Mid-360 spec: 59° vertical FOV
+            horizontal_fov_range=(0.0, 360.0), # full 360° horizontal
+            horizontal_res=1.0,                # tune for point density vs. compute cost
+        ),
+        debug_vis=True,
+    )
+    # --- D435-like RGB-D camera, mounted on the robot ---
+    d435_camera = CameraCfg(
+        prim_path="{ENV_REGEX_NS}/Robot/d435_link/Camera",
+        update_period=1 / 30,          # D435 default depth/RGB stream rate
+        width=640,
+        height=480,                    # matches common D435 depth stream (848x480 also common)
+        data_types=["rgb", "depth"],   # only rgb/depth are supported by the Newton Warp renderer
+        spawn=sim_utils.PinholeCameraCfg(
+            focal_length=1.93,             # D435 RGB module focal length (mm)
+            horizontal_aperture=3.68,      # sized to give ~69° horizontal FOV (RGB spec)
+            clipping_range=(0.1, 10.0),    # D435 depth range spec (usable accuracy ~0.3-3 m)
+        ),
+        offset=CameraCfg.OffsetCfg(
+            pos=(0.0, 0.0, 0.0),
+            rot=(0.0, 0.0, 0.0, 1.0),      # identity, (x, y, z, w) order in 3.0
+            convention="ros",              # +Z forward, -Y up — matches how D435 depth data is usually consumed
+        ),
+        renderer_cfg=NewtonWarpRendererCfg(),
+    )
+ 
+    # multi-body contact reporting
+    contact_forces = ContactSensorCfg(
+        prim_path="{ENV_REGEX_NS}/Robot/.*",
+        history_length=3,
+        track_air_time=True,
+    )
+ 
+    # lights
+    sky_light = AssetBaseCfg(
+        prim_path="/World/skyLight",
+        spawn=sim_utils.DomeLightCfg(
+            intensity=750.0,
+            texture_file=f"{ISAAC_NUCLEUS_DIR}/Materials/Textures/Skies/PolyHaven/kloofendal_43d_clear_puresky_4k.hdr",
+        ),
+    )

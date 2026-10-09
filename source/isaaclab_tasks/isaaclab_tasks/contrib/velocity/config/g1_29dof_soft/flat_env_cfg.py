@@ -59,10 +59,13 @@ class G1FlatEnvCfg(G1RoughEnvCfg):
         self.events.reset_robot_joints.params["position_range"] = (0.5, 1.5)
 
         # edit command range
-        self.commands.base_velocity.ranges.lin_vel_x = (-1.0, 1.5)
-        self.commands.base_velocity.ranges.lin_vel_y = (-0.5, 0.5)
-        self.commands.base_velocity.ranges.ang_vel_z = (-1.0, 1.0)
-        self.commands.base_velocity.ranges.heading = (-math.pi, math.pi)
+        self.commands.base_velocity.ranges.lin_vel_x = (1.0, 1.0)
+        # self.commands.base_velocity.ranges.lin_vel_y = (-0.5, 0.5)
+        self.commands.base_velocity.ranges.lin_vel_y = (0.0, 0.0)
+        # self.commands.base_velocity.ranges.ang_vel_z = (-1.0, 1.0)
+        self.commands.base_velocity.ranges.ang_vel_z = (0.0, 0.0)
+        self.commands.base_velocity.heading_command = False
+        # self.commands.base_velocity.ranges.heading = (0.0, 0.0)
 
         # disable for non rough terrain
         self.terminations.terrain_out_of_bounds = None  # type: ignore
@@ -188,10 +191,14 @@ class G1FlatEnvCfgPerception(G1RoughEnvCfgPerception):
         self.events.reset_robot_joints.params["position_range"] = (0.5, 1.5)
 
         # edit command range
-        self.commands.base_velocity.ranges.lin_vel_x = (-1.0, 1.5)
-        self.commands.base_velocity.ranges.lin_vel_y = (-0.5, 0.5)
-        self.commands.base_velocity.ranges.ang_vel_z = (-1.0, 1.0)
-        self.commands.base_velocity.ranges.heading = (-math.pi, math.pi)
+        # edit command range
+        self.commands.base_velocity.ranges.lin_vel_x = (1.0, 1.0)
+        # self.commands.base_velocity.ranges.lin_vel_y = (-0.5, 0.5)
+        self.commands.base_velocity.ranges.lin_vel_y = (0.0, 0.0)
+        # self.commands.base_velocity.ranges.ang_vel_z = (-1.0, 1.0)
+        self.commands.base_velocity.ranges.ang_vel_z = (0.0, 0.0)
+        self.commands.base_velocity.heading_command = False
+                # self.commands.base_velocity.ranges.heading = (0.0, 0.0)
 
         # disable for non rough terrain
         self.terminations.terrain_out_of_bounds = None  # type: ignore
