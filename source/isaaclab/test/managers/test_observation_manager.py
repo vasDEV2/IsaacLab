@@ -1010,3 +1010,38 @@ def test_positional_out_does_not_enable_destination_writes(setup_env):
     result = manager.compute()["policy"]
     setup_env.data.pos_w.zero_()
     torch.testing.assert_close(result, expected)
+
+
+@pytest.mark.parametrize("env_var", ["ISAACLAB_CHECK_FINITE", "ISAACLAB_CHECK_OBSERVATION_FINITE"])
+def test_nonfinite_observation_diagnostic_identifies_term_and_environment(setup_env, monkeypatch, env_var):
+    """Opt-in finite checks identify the observation term and offending environment."""
+    monkeypatch.setenv(env_var, "1")
+    cfg = ObservationGroupCfg()
+    cfg.position = ObservationTermCfg(func=pos_w_data)
+    manager = ObservationManager({"policy": cfg}, setup_env)
+    setup_env.data.pos_w[3, 1] = torch.nan
+
+    with pytest.raises(
+        ValueError,
+        match=r"policy/position.*environment\(s\) \[3\].*feature indices.*\[1\]",
+    ):
+        manager.compute()
+
+
+def test_nonfinite_observation_sanitization_zeros_invalid_term(setup_env, monkeypatch, caplog):
+    """Sanitization keeps invalid observations finite before they enter the output/history."""
+    monkeypatch.delenv("ISAACLAB_CHECK_FINITE", raising=False)
+    monkeypatch.delenv("ISAACLAB_CHECK_OBSERVATION_FINITE", raising=False)
+    monkeypatch.setenv("ISAACLAB_SANITIZE_NONFINITE", "1")
+    cfg = ObservationGroupCfg()
+    cfg.position = ObservationTermCfg(func=pos_w_data, history_length=2)
+    manager = ObservationManager({"policy": cfg}, setup_env)
+    setup_env.data.pos_w[3, 1] = torch.nan
+
+    first = manager.compute()["policy"]
+    actual = manager.compute()["policy"]
+
+    assert torch.isfinite(actual).all()
+    assert torch.isfinite(first).all()
+    torch.testing.assert_close(actual[3].reshape(2, 3)[:, 1], torch.zeros(2))
+    assert "Observation term 'policy/position'" in caplog.text

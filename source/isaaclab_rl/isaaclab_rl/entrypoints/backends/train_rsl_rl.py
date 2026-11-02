@@ -95,6 +95,21 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
         default=True,
         help="Restore the policy optimizer; disable to keep a fresh optimizer and configured learning rate.",
     )
+    parser.add_argument(
+        "--check_observation_finite",
+        action="store_true",
+        help="Report the first observation term and environment with non-finite values.",
+    )
+    parser.add_argument(
+        "--check_finite",
+        action="store_true",
+        help="Report non-finite policy actions, action terms, reward terms, and observation terms.",
+    )
+    parser.add_argument(
+        "--sanitize_nonfinite",
+        action="store_true",
+        help="Replace non-finite actions, reward terms, and observation terms with zero and warn.",
+    )
     cli_args.add_rsl_rl_args(parser)
     add_launcher_args(parser)
     remaining_args_env_registration = cli_args.register_external_tasks(argv)
@@ -103,6 +118,8 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
         _, remaining_args_env_registration = setup_preset_cli(parser, remaining_args_env_registration)
     if args_cli.wandb_run is not None and args_cli.checkpoint:
         raise ValueError("--wandb_run cannot be combined with --checkpoint.")
+    if args_cli.sanitize_nonfinite and (args_cli.check_finite or args_cli.check_observation_finite):
+        raise ValueError("--sanitize_nonfinite cannot be combined with finite-value diagnostic options.")
     enable_cameras_for_video(args_cli)
     set_hydra_args(list_intersection(remaining_args, remaining_args_env_registration))
     return args_cli
@@ -143,6 +160,12 @@ def _resolve_checkpoint(args_cli: argparse.Namespace, agent_cfg: RslRlBaseRunner
 def run(argv: list[str]) -> None:
     """Train an RSL-RL agent while restoring the caller's Torch backend settings."""
     args_cli = _parse_args(argv)
+    if args_cli.sanitize_nonfinite:
+        os.environ["ISAACLAB_SANITIZE_NONFINITE"] = "1"
+    if args_cli.check_finite:
+        os.environ["ISAACLAB_CHECK_FINITE"] = "1"
+    if args_cli.check_observation_finite:
+        os.environ["ISAACLAB_CHECK_OBSERVATION_FINITE"] = "1"
     with scoped_torch_backend_flags(
         cuda_matmul_allow_tf32=True,
         cudnn_allow_tf32=True,

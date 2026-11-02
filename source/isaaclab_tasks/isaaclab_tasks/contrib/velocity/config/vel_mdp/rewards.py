@@ -65,6 +65,9 @@ def foot_clearance_reward(
     standing_position_foot_z: float = 0.039,
     height_sensor_cfg: SceneEntityCfg | None = None,
     ground_height_offset: float = 0.0,
+    command_name: str | None = None,
+    command_threshold: float = 0.05,
+    foot_speed_threshold: float = 0.05,
 ) -> torch.Tensor:
     """Reward foot clearance relative to the mean scanned ground height.
 
@@ -79,6 +82,10 @@ def foot_clearance_reward(
             the ground reference is world Z = 0, matching the existing reward.
         ground_height_offset: Optional offset to the ground height [m]. This is useful for accounting for additional layers
             such as sand or other terrain features above the base ground level.
+        command_name: Optional velocity command name. When set, the reward is 0 while a non-zero planar velocity is
+            commanded and all feet are standing still, and is unchanged otherwise. When ``None``, no gating is applied.
+        command_threshold: Commanded planar speed above which the command counts as non-zero [m/s].
+        foot_speed_threshold: Planar foot speed at or below which a foot counts as still [m/s].
 
     Returns:
         Velocity-weighted clearance reward, shape ``(num_envs,)``.
@@ -96,4 +103,11 @@ def foot_clearance_reward(
     velocity_weight = torch.tanh(
         tanh_mult * torch.linalg.vector_norm(asset.data.body_lin_vel_w.torch[:, asset_cfg.body_ids, :2], dim=-1)
     )
-    return torch.exp(-torch.sum(height_error * velocity_weight, dim=1) / std)
+    reward = torch.exp(-torch.sum(height_error * velocity_weight, dim=1) / std)
+    if command_name is not None:
+        command_speed = torch.linalg.vector_norm(env.command_manager.get_command(command_name)[:, :2], dim=-1)
+        foot_speed = torch.linalg.vector_norm(asset.data.body_lin_vel_w.torch[:, asset_cfg.body_ids, :2], dim=-1)
+        commanded_to_move = command_speed > command_threshold
+        feet_still = (foot_speed <= foot_speed_threshold).all(dim=-1)
+        reward = reward * ~(commanded_to_move & feet_still)
+    return reward

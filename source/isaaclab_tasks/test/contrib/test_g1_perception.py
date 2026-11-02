@@ -12,16 +12,37 @@ import torch
 from tensordict import TensorDict
 
 from isaaclab.managers import ObservationTermCfg, SceneEntityCfg
+from isaaclab.sensors import patterns
 
 from isaaclab_tasks.contrib.velocity.config.g1_29dof_perception.agents.pointnet import PointNetMLPModel
+from isaaclab_tasks.contrib.velocity.config.g1_29dof_perception.env_cfg.sensors_cfg import elevation_grid_pattern
 from isaaclab_tasks.contrib.velocity.config.g1_29dof_perception.mdp.depth import depth_image
-from isaaclab_tasks.contrib.velocity.config.g1_29dof_perception.mdp.observations import lidar_point_cloud
+from isaaclab_tasks.contrib.velocity.config.g1_29dof_perception.mdp.observations import (
+    elevation_map,
+    finite_base_ang_vel,
+    lidar_point_cloud,
+)
 from isaaclab_tasks.contrib.velocity.config.g1_29dof_perception.mdp.stair_rewards import (
     feet_stumble,
     local_base_height_l2,
+    local_stance_foot_angle_penalty,
     stair_foot_clearance,
+    world_height_convergence,
+    world_height_error,
 )
 from isaaclab_tasks.contrib.velocity.config.g1_29dof_perception.mdp.symmetry import mirror_elevation_map
+from isaaclab_tasks.contrib.velocity.config.vel_mdp.rewards import foot_clearance_reward
+
+
+def test_finite_base_ang_vel_replaces_nonfinite_components():
+    """The policy and critic receive finite angular velocity even if the simulator state is invalid."""
+    angular_velocity = torch.tensor([[0.5, math.nan, math.inf], [-math.inf, -0.25, 1.0]])
+    robot = SimpleNamespace(data=SimpleNamespace(root_ang_vel_b=SimpleNamespace(torch=angular_velocity)))
+    env = SimpleNamespace(scene={"robot": robot})
+
+    actual = finite_base_ang_vel(env)
+
+    torch.testing.assert_close(actual, torch.tensor([[0.5, 0.0, 0.0], [0.0, -0.25, 1.0]]))
 
 
 def test_elevation_map_mirror_moves_terrain_to_the_opposite_lateral_cell():
@@ -70,7 +91,9 @@ def test_stair_rewards_use_local_treads_and_do_not_reward_motionless_feet():
     )
     scanner = SimpleNamespace(
         data=SimpleNamespace(
-            ray_hits_w=SimpleNamespace(torch=torch.tensor([[[0.0, 0.0, 0.0], [1.0, 0.0, 0.2], [math.nan] * 3]]))
+            ray_hits_w=SimpleNamespace(
+                torch=torch.tensor([[[0.0, 0.0, 0.0], [1.0, 0.0, 0.2], [10.0, 0.0, 10.0], [math.nan] * 3]])
+            )
         )
     )
     command = torch.tensor([[0.75, 0.0, 0.0]])
@@ -94,6 +117,72 @@ def test_stair_rewards_use_local_treads_and_do_not_reward_motionless_feet():
     torch.testing.assert_close(stair_foot_clearance(env, **params), torch.zeros(1))
 
 
+def test_stance_foot_angle_uses_scanner_hits_near_each_foot():
+    """Feet aligned with distinct local slopes have no angle penalty."""
+    slope_angle = math.atan(0.5)
+    foot_quat = torch.tensor(
+        [[[0.0, 0.0, 0.0, 1.0], [0.0, -math.sin(slope_angle / 2), 0.0, math.cos(slope_angle / 2)]]]
+    )
+    feet = torch.tensor([[[0.0, 0.0, 0.0], [2.0, 0.0, 0.0]]])
+    offsets = ((-0.1, -0.1), (-0.1, 0.1), (0.1, -0.1), (0.1, 0.1))
+    hits = [[x, y, 0.0] for x, y in offsets]
+    hits.extend([[2.0 + x, y, 0.5 * x] for x, y in offsets])
+    hits.extend([[10.0, -1.0, -10.0], [10.0, 1.0, 10.0]])
+    robot = SimpleNamespace(
+        data=SimpleNamespace(body_pos_w=SimpleNamespace(torch=feet), body_quat_w=SimpleNamespace(torch=foot_quat))
+    )
+    scanner = SimpleNamespace(data=SimpleNamespace(ray_hits_w=SimpleNamespace(torch=torch.tensor([hits]))))
+    contact_sensor = SimpleNamespace(data=SimpleNamespace(current_contact_time=SimpleNamespace(torch=torch.ones(1, 2))))
+
+    class Scene(dict):
+        def __init__(self):
+            super().__init__(robot=robot, scanner=scanner)
+            self.sensors = {"contacts": contact_sensor}
+
+    env = SimpleNamespace(scene=Scene(), device="cpu")
+    asset_cfg = SceneEntityCfg("robot", body_ids=[0, 1])
+    penalty = local_stance_foot_angle_penalty(
+        env,
+        sensor_cfg=SceneEntityCfg("contacts", body_ids=[0, 1]),
+        asset_cfg=asset_cfg,
+        height_sensor_cfg=SceneEntityCfg("scanner"),
+        angle_tolerance=0.0,
+        local_radius=0.3,
+    )
+    torch.testing.assert_close(penalty, torch.zeros(1), atol=1e-6, rtol=0.0)
+
+
+def test_world_height_reward_pays_progress_toward_zero_not_standing_at_height():
+    """Descending from a top or rising from a bottom pays; standing, moving away or an uncommanded env do not."""
+    root_z = torch.tensor([1.95, -0.45, 1.95, -0.45, 1.95, 0.75, 1.95, 1.95])
+    vertical = torch.tensor([-0.5, 0.5, 0.0, 0.0, 0.5, 0.5, -5.0, -0.5])
+    velocity = torch.stack((torch.ones(8), torch.zeros(8), vertical), dim=-1)
+    robot = SimpleNamespace(
+        data=SimpleNamespace(
+            root_pos_w=SimpleNamespace(torch=torch.stack((torch.zeros(8), torch.zeros(8), root_z), dim=-1)),
+            root_lin_vel_w=SimpleNamespace(torch=velocity),
+        )
+    )
+    command = torch.tensor([[1.0, 0.0, 0.0]] * 7 + [[0.0, 0.0, 0.0]])
+    env = SimpleNamespace(scene={"robot": robot}, command_manager=SimpleNamespace(get_command=lambda name: command))
+    torch.testing.assert_close(
+        world_height_convergence(env), torch.tensor([0.5, 0.5, 0.0, 0.0, -0.5, 0.0, 1.0, 0.0]), atol=1e-6, rtol=0.0
+    )
+
+
+def test_world_height_error_charges_distance_from_zero_for_commanded_envs_only():
+    """The error is the clipped distance to the target height from either side, and zero when uncommanded."""
+    root_z = torch.tensor([0.75, 1.95, -0.45, 9.0, 1.95])
+    robot = SimpleNamespace(
+        data=SimpleNamespace(
+            root_pos_w=SimpleNamespace(torch=torch.stack((torch.zeros(5), torch.zeros(5), root_z), dim=-1)),
+        )
+    )
+    command = torch.tensor([[1.0, 0.0, 0.0]] * 4 + [[0.0, 0.0, 0.0]])
+    env = SimpleNamespace(scene={"robot": robot}, command_manager=SimpleNamespace(get_command=lambda name: command))
+    torch.testing.assert_close(world_height_error(env), torch.tensor([0.0, 1.2, 1.2, 2.0, 0.0]), atol=1e-6, rtol=0.0)
+
+
 def test_lidar_uses_measurement_frame_and_masks_misses():
     """World translation/yaw must not leak into the sensor-frame cloud; misses stay finite."""
     sensor = SimpleNamespace(
@@ -115,6 +204,69 @@ def test_lidar_uses_measurement_frame_and_masks_misses():
     actual = term(env, **cfg.params)
     expected = torch.tensor([[[2.0, 0.0, 0.0, 1.0], [0.0, 1.0, 0.0, 1.0], [0.0] * 4, [0.0] * 4, [0.0] * 4]])
     torch.testing.assert_close(actual, expected, atol=1e-6, rtol=1e-6)
+
+
+def test_elevation_map_masks_nonfinite_sensor_pose():
+    """An invalid scanner frame yields the configured finite missing-ray value."""
+    pattern = patterns.GridPatternCfg(
+        func=elevation_grid_pattern,
+        resolution=0.2,
+        size=(0.2, 0.2),
+        ordering="yx",
+    )
+    starts, _ = pattern.func(pattern, "cpu")
+    sensor = SimpleNamespace(
+        num_rays=starts.shape[0],
+        cfg=SimpleNamespace(ray_alignment="yaw", pattern_cfg=pattern),
+        data=SimpleNamespace(
+            pos_w=SimpleNamespace(torch=torch.tensor([[math.nan, 0.0, 1.0]])),
+            quat_w=SimpleNamespace(torch=torch.tensor([[0.0, 0.0, 0.0, 1.0]])),
+            ray_hits_w=SimpleNamespace(torch=torch.zeros(1, starts.shape[0], 3)),
+        ),
+    )
+    env = SimpleNamespace(scene=SimpleNamespace(sensors={"height_scanner": sensor}), device="cpu")
+    cfg = ObservationTermCfg(
+        func=elevation_map,
+        params={"sensor_cfg": SceneEntityCfg("height_scanner"), "missing_height": -2.0},
+    )
+    term = elevation_map(cfg, env)
+    actual = term(env, **cfg.params)
+    assert torch.isfinite(actual).all()
+    torch.testing.assert_close(actual[..., 2], torch.full_like(actual[..., 2], -2.0))
+
+
+def test_foot_clearance_ignores_nonfinite_height_scan_hits():
+    """Missed and invalid rays cannot turn a zero-speed clearance reward into NaN."""
+    robot = SimpleNamespace(
+        data=SimpleNamespace(
+            body_pos_w=SimpleNamespace(torch=torch.tensor([[[0.0, 0.0, 0.43539]], [[0.0, 0.0, 0.13539]]])),
+            body_lin_vel_w=SimpleNamespace(torch=torch.tensor([[[1.0, 0.0, 0.0]], [[0.0, 0.0, 0.0]]])),
+        )
+    )
+    scanner = SimpleNamespace(
+        data=SimpleNamespace(
+            ray_hits_w=SimpleNamespace(
+                torch=torch.tensor(
+                    [
+                        [[0.0, 0.0, 0.2], [0.0, 0.0, 0.4], [math.inf] * 3, [math.nan] * 3],
+                        [[math.inf] * 3, [math.nan] * 3, [math.inf] * 3, [math.nan] * 3],
+                    ]
+                )
+            )
+        )
+    )
+    env = SimpleNamespace(scene={"robot": robot, "height_scanner": scanner})
+    reward = foot_clearance_reward(
+        env,
+        target_height=0.1,
+        std=0.05,
+        tanh_mult=2.0,
+        asset_cfg=SceneEntityCfg("robot", body_ids=[0]),
+        standing_position_foot_z=0.03539,
+        height_sensor_cfg=SceneEntityCfg("height_scanner"),
+    )
+    assert torch.isfinite(reward).all()
+    torch.testing.assert_close(reward, torch.ones(2))
 
 
 def _make_model():

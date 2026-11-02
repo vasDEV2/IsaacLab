@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import os
 from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
@@ -14,6 +15,7 @@ import torch
 from prettytable import PrettyTable
 
 from ..utils import index_fill_
+from .finite_check import check_finite_tensor, sanitize_finite_tensor
 from .manager_base import ManagerBase, ManagerTermBase
 from .manager_term_cfg import RewardTermCfg
 
@@ -56,6 +58,9 @@ class RewardManager(ManagerBase):
 
         # call the base class constructor (this will parse the terms config)
         super().__init__(cfg, env)
+        self._check_finite = os.environ.get("ISAACLAB_CHECK_FINITE") == "1"
+        self._sanitize_nonfinite = os.environ.get("ISAACLAB_SANITIZE_NONFINITE") == "1"
+        self._nonfinite_warnings: set[str] = set()
         # episodic sum of each term; the dictionary holds column views of one matrix for batched updates
         self._episode_sum_buf = torch.zeros(
             (self.num_envs, len(self._term_names)), dtype=torch.float, device=self.device
@@ -147,8 +152,22 @@ class RewardManager(ManagerBase):
             else:
                 # broadcast scalar values
                 step_reward[:] = value * term_cfg.weight
+            if self._check_finite:
+                check_finite_tensor(step_reward, f"Reward term '{self._term_names[term_idx]}' weighted contribution")
+            if self._sanitize_nonfinite:
+                safe_step_reward = sanitize_finite_tensor(
+                    step_reward,
+                    f"Reward term '{self._term_names[term_idx]}' weighted contribution",
+                    self._nonfinite_warnings,
+                )
+                step_reward.copy_(safe_step_reward)
         # update total reward and episodic sums with the time-step scaling
         torch.sum(self._step_reward, dim=1, out=self._reward_buf).mul_(dt)
+        if self._check_finite:
+            check_finite_tensor(self._reward_buf, "Aggregated reward")
+        if self._sanitize_nonfinite:
+            safe_reward = sanitize_finite_tensor(self._reward_buf, "Aggregated reward", self._nonfinite_warnings)
+            self._reward_buf.copy_(safe_reward)
         self._episode_sum_buf.add_(self._step_reward, alpha=dt)
 
         return self._reward_buf

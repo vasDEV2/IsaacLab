@@ -182,6 +182,11 @@ ENV PATH=${VENV_PATH_ARG}/bin:${PATH}
 ENV UV_NO_SYNC=1
 ENV PYTHONUNBUFFERED=1
 
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv pip install --python ${VENV_PATH_ARG}/bin/python wandb moviepy && \
+    find ${VIRTUAL_ENV} \! -user isaaclab \
+      -exec chown isaaclab:isaaclab {} + -exec chmod a+rwX {} +
+
 # The Isaac Sim image sets MUJOCO_GL=egl, and importing mujoco then sets PYOPENGL_PLATFORM=egl,
 # so the windowed Newton viewers draw an X11 window through EGL bindings and fail with "no valid
 # context". Isaac Lab uses MuJoCo only for physics, so turn off its renderer.

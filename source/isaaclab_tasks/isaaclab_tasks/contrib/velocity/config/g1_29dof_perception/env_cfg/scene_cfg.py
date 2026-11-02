@@ -9,14 +9,19 @@ import isaaclab.sim as sim_utils
 from isaaclab.assets import ArticulationCfg, AssetBaseCfg
 from isaaclab.scene import InteractiveSceneCfg
 from isaaclab.sensors import CameraCfg, ContactSensorCfg, RayCasterCfg, patterns
-from isaaclab.terrains import MeshPyramidStairsTerrainCfg, TerrainGeneratorCfg, TerrainImporterCfg
-from isaaclab.terrains.trimesh.mesh_terrains_cfg import MeshInvertedPyramidStairsTerrainCfg
+from isaaclab.terrains import MeshPlaneTerrainCfg, MeshPyramidStairsTerrainCfg, MeshInvertedPyramidStairsTerrainCfg, TerrainGeneratorCfg, TerrainImporterCfg
 from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR, ISAACLAB_NUCLEUS_DIR
 from isaaclab.utils.configclass import configclass
 
 from isaaclab_assets import UNITREE_G1_29DOF_BOX_FOOT_CFG
 
+from ..mdp.terrains import StairsCurriculumTerrainCfg, num_stair_levels
 from .sensors_cfg import DEPTH_CAMERA_CFG, elevation_grid_pattern
+
+# flat -> up 1 -> down 1 -> up 2 -> ... -> full pyramid; rows of the generator map 1:1 to these levels
+_STAIRS_CURRICULUM_CFG = StairsCurriculumTerrainCfg(
+    size=(8.0, 8.0), border_width=2.0, step_height_range=(0.10, 0.10), step_width=0.30, platform_width=1.2
+)
 
 
 @configclass
@@ -29,31 +34,16 @@ class G1PerceptionSceneCfg(InteractiveSceneCfg):
         terrain_generator=TerrainGeneratorCfg(
             size=(8.0, 8.0),
             border_width=5.0,
-            num_rows=10,
-            num_cols=10,
+            num_rows=num_stair_levels(_STAIRS_CURRICULUM_CFG),
+            num_cols=20,
             horizontal_scale=0.1,
             vertical_scale=0.005,
             slope_threshold=0.75,
             use_cache=False,
             curriculum=True,
-            sub_terrains={
-                "pyramid_stairs": MeshPyramidStairsTerrainCfg(
-                    proportion=1.0,
-                    step_height_range=(0.00, 0.2),
-                    step_width=0.15,
-                    platform_width=1.0,
-                    border_width=2.0,
-                ),
-                "inverted_pyramid_stairs": MeshInvertedPyramidStairsTerrainCfg(
-                    proportion=1.0,
-                    step_height_range=(0.00, 0.2),
-                    step_width=0.15,
-                    platform_width=1.0,
-                    border_width=2.0,
-                ),
-            },
+            sub_terrains={"stairs": _STAIRS_CURRICULUM_CFG},
         ),
-        max_init_terrain_level=0,
+        max_init_terrain_level=19,
         collision_group=-1,
         physics_material=sim_utils.RigidBodyMaterialCfg(
             friction_combine_mode="multiply",
@@ -74,11 +64,11 @@ class G1PerceptionSceneCfg(InteractiveSceneCfg):
         offset=RayCasterCfg.OffsetCfg(pos=(0.0, 0.0, 0.0)),
         ray_alignment="yaw",
         pattern_cfg=patterns.GridPatternCfg(
-            func=elevation_grid_pattern, resolution=0.1, size=(3.2, 2.0), ordering="yx"
+            func=elevation_grid_pattern, resolution=0.2, size=(1.5, 1.5), ordering="yx"
         ),
         mesh_prim_paths=["/World/ground"],
         global_world_only=True,
-        debug_vis=False,
+        debug_vis=True,
     )
     mid360_lidar: RayCasterCfg | None = None
     d435_camera: CameraCfg | None = None

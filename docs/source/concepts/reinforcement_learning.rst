@@ -523,6 +523,27 @@ propagate through the observations, rewards, and learner. Reproduce the failure
 without training when possible, and locate the first value that becomes
 non-finite.
 
+For RSL-RL, run training with ``--check_finite`` to check the policy action
+entering the environment, each action term before and after processing, each
+weighted reward term, the aggregated reward, and each observation term. The
+error reports the first checked boundary, term, environment, and feature
+indices. The older ``--check_observation_finite`` option checks observation
+terms only. These checks synchronize tensor results and are intended for
+diagnosis, not long training runs.
+
+For a run that should continue instead of stopping, use ``--sanitize_nonfinite``
+to replace non-finite policy actions, processed action terms, weighted reward
+terms, aggregate rewards, and observations with zero. The first affected
+pipeline term and environment are logged once. Sanitization protects the RL
+interface but does not repair invalid simulator state; use the diagnostic mode
+to stop at the first detected boundary when investigating a failure.
+
+The first reported term may be where an invalid simulator state becomes
+observable, rather than the operation that originally corrupted it. For
+example, non-finite joint positions in an observation indicate invalid
+articulation state; inspect physics, contacts, actions, and reset behavior
+before treating the observation as the cause.
+
 Check:
 
 * reset joint positions, velocities, and object poses;

@@ -120,6 +120,50 @@ def test_compute():
     assert all(value.item() == 0.0 for value in rew_man.reset(torch.tensor([2])).values())
 
 
+def test_nonfinite_reward_diagnostic_identifies_term_and_environment(env, monkeypatch):
+    """Finite checks name the reward term and environment before aggregation."""
+    monkeypatch.setenv("ISAACLAB_CHECK_FINITE", "1")
+
+    def reward_with_nan(env):
+        reward = torch.zeros(env.num_envs)
+        reward[5] = torch.nan
+        return reward
+
+    manager = RewardManager({"unstable_reward": RewardTermCfg(func=reward_with_nan, weight=1.0)}, env)
+
+    with pytest.raises(ValueError, match=r"Reward term 'unstable_reward'.*environment\(s\) \[5\]"):
+        manager.compute(dt=env.dt)
+
+
+def test_nonfinite_reward_sanitization_zeros_only_invalid_contribution(env, monkeypatch, caplog):
+    """Sanitization zeros a bad reward term without discarding finite reward terms."""
+    monkeypatch.delenv("ISAACLAB_CHECK_FINITE", raising=False)
+    monkeypatch.setenv("ISAACLAB_SANITIZE_NONFINITE", "1")
+
+    def reward_with_nan(env):
+        reward = torch.ones(env.num_envs)
+        reward[5] = torch.nan
+        reward[6] = torch.inf
+        reward[7] = -torch.inf
+        return reward
+
+    manager = RewardManager(
+        {
+            "unstable_reward": RewardTermCfg(func=reward_with_nan, weight=1.0),
+            "valid_reward": RewardTermCfg(func=grilled_chicken, weight=2.0),
+        },
+        env,
+    )
+
+    reward = manager.compute(dt=env.dt)
+
+    expected = torch.full((env.num_envs,), 0.3)
+    expected[5:8] = 0.2
+    torch.testing.assert_close(reward, expected)
+    assert torch.isfinite(manager._episode_sum_buf).all()
+    assert "Reward term 'unstable_reward'" in caplog.text
+
+
 def test_config_empty(env):
     """Test the creation of reward manager with empty config."""
     rew_man = RewardManager(None, env)

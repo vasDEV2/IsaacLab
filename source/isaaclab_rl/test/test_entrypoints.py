@@ -739,7 +739,13 @@ def test_failed_rsl_training_restores_torch_backend_state(monkeypatch) -> None:
     for (target, name), value in zip(settings, caller_state):
         monkeypatch.setattr(target, name, value)
 
-    monkeypatch.setattr(train_rsl_rl, "_parse_args", lambda argv: types.SimpleNamespace())
+    monkeypatch.setattr(
+        train_rsl_rl,
+        "_parse_args",
+        lambda argv: types.SimpleNamespace(
+            check_observation_finite=False, check_finite=False, sanitize_nonfinite=False
+        ),
+    )
 
     def fail_after_mutation(_args_cli) -> None:
         assert _torch_backend_state() == (True, True, False, True)
@@ -752,10 +758,6 @@ def test_failed_rsl_training_restores_torch_backend_state(monkeypatch) -> None:
     assert _torch_backend_state() == caller_state
 
 
-@pytest.mark.parametrize("mode", ["train", "play"])
-def test_rsl_registers_external_task_before_agent_discovery(monkeypatch, mode) -> None:
-    """External task registration preserves selector aliases through callback filtering."""
-    entrypoint = importlib.import_module(f"isaaclab_rl.entrypoints.backends.{mode}_rsl_rl")
 @pytest.mark.parametrize("backend_name", ["train_rsl_rl", "play_rsl_rl"])
 @pytest.mark.parametrize("checkpoint", [None, "latest"])
 def test_rsl_parses_wandb_checkpoint_source(backend_name, checkpoint, monkeypatch) -> None:
@@ -785,10 +787,96 @@ def test_rsl_parses_wandb_checkpoint_source(backend_name, checkpoint, monkeypatc
         assert args.wandb_project == "teachers"
 
 
-def test_rsl_training_registers_external_task_before_agent_discovery(monkeypatch) -> None:
-    """RSL-RL parses tasks registered by its external callback."""
+def test_rsl_training_parses_observation_finite_diagnostic_flag(monkeypatch) -> None:
+    """The training CLI accepts the finite-observation diagnostic switch."""
     from isaaclab_rl.entrypoints.backends import train_rsl_rl
 
+    args = train_rsl_rl._parse_args(["--task", "Isaac-Cartpole", "--check_observation_finite"])
+
+    assert args.check_observation_finite
+
+
+def test_rsl_training_parses_pipeline_finite_diagnostic_flag(monkeypatch) -> None:
+    """The training CLI accepts the action/reward/observation diagnostic switch."""
+    from isaaclab_rl.entrypoints.backends import train_rsl_rl
+
+    args = train_rsl_rl._parse_args(["--task", "Isaac-Cartpole", "--check_finite"])
+
+    assert args.check_finite
+
+
+def test_rsl_training_parses_nonfinite_sanitization_flag(monkeypatch) -> None:
+    """The training CLI accepts the opt-in non-finite value sanitization switch."""
+    from isaaclab_rl.entrypoints.backends import train_rsl_rl
+
+    args = train_rsl_rl._parse_args(["--task", "Isaac-Cartpole", "--sanitize_nonfinite"])
+
+    assert args.sanitize_nonfinite
+
+
+def test_rsl_training_rejects_combined_check_and_sanitization_flags(monkeypatch) -> None:
+    """Fail-fast diagnostics and sanitization cannot be enabled together."""
+    from isaaclab_rl.entrypoints.backends import train_rsl_rl
+
+    with pytest.raises(ValueError, match="cannot be combined"):
+        train_rsl_rl._parse_args(["--task", "Isaac-Cartpole", "--check_finite", "--sanitize_nonfinite"])
+
+
+def test_rsl_training_enables_observation_finite_diagnostic(monkeypatch) -> None:
+    """The diagnostic CLI flag is set before environment construction starts."""
+    from isaaclab_rl.entrypoints.backends import train_rsl_rl
+
+    monkeypatch.delenv("ISAACLAB_CHECK_OBSERVATION_FINITE", raising=False)
+    monkeypatch.setattr(
+        train_rsl_rl,
+        "_parse_args",
+        lambda argv: types.SimpleNamespace(check_observation_finite=True, check_finite=False, sanitize_nonfinite=False),
+    )
+    monkeypatch.setattr(train_rsl_rl, "_run", lambda args_cli: None)
+
+    train_rsl_rl.run([])
+
+    assert os.environ["ISAACLAB_CHECK_OBSERVATION_FINITE"] == "1"
+
+
+def test_rsl_training_enables_pipeline_finite_diagnostic(monkeypatch) -> None:
+    """The pipeline diagnostic flag is set before environment construction starts."""
+    from isaaclab_rl.entrypoints.backends import train_rsl_rl
+
+    monkeypatch.delenv("ISAACLAB_CHECK_FINITE", raising=False)
+    monkeypatch.setattr(
+        train_rsl_rl,
+        "_parse_args",
+        lambda argv: types.SimpleNamespace(check_finite=True, check_observation_finite=False, sanitize_nonfinite=False),
+    )
+    monkeypatch.setattr(train_rsl_rl, "_run", lambda args_cli: None)
+
+    train_rsl_rl.run([])
+
+    assert os.environ["ISAACLAB_CHECK_FINITE"] == "1"
+
+
+def test_rsl_training_enables_nonfinite_sanitization(monkeypatch) -> None:
+    """The sanitization flag is set before environment construction starts."""
+    from isaaclab_rl.entrypoints.backends import train_rsl_rl
+
+    monkeypatch.delenv("ISAACLAB_SANITIZE_NONFINITE", raising=False)
+    monkeypatch.setattr(
+        train_rsl_rl,
+        "_parse_args",
+        lambda argv: types.SimpleNamespace(check_finite=False, check_observation_finite=False, sanitize_nonfinite=True),
+    )
+    monkeypatch.setattr(train_rsl_rl, "_run", lambda args_cli: None)
+
+    train_rsl_rl.run([])
+
+    assert os.environ["ISAACLAB_SANITIZE_NONFINITE"] == "1"
+
+
+@pytest.mark.parametrize("mode", ["train", "play"])
+def test_rsl_registers_external_task_before_agent_discovery(monkeypatch, mode) -> None:
+    """External task registration preserves selector aliases through callback filtering."""
+    entrypoint = importlib.import_module(f"isaaclab_rl.entrypoints.backends.{mode}_rsl_rl")
     task_name = "Isaac-ExternalCallbackOrderTest"
     callback_module_name = "_external_callback_order_test"
     callback_module = types.ModuleType(callback_module_name)

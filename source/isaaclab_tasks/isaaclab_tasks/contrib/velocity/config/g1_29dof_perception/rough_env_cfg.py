@@ -48,14 +48,19 @@ class G1RoughPerceptionEnvCfg(ManagerBasedRLEnvCfg):
         self.sim.physics_material = self.scene.terrain.physics_material
         self.scene.height_scanner.update_period = self.decimation * self.sim.dt
         self.scene.contact_forces.update_period = self.sim.dt
-        self.sim.visualizer_cfgs = [
-            NewtonGLVisualizerCfg(eye=(12.0, 0.0, 6.0), headless=True),
-            NewtonRTXVisualizerCfg(eye=(12.0, 0.0, 6.0), headless=True),
-        ]
+        # self.sim.visualizer_cfgs = [
+        #     NewtonGLVisualizerCfg(eye=(12.0, 0.0, 6.0), headless=False),
+        # #     # NewtonRTXVisualizerCfg(eye=(12.0, 0.0, 6.0), headless=False),
+        # ]
+
+        self.sim.visualizer_cfgs = []
+        # self.video_recorders = []
+
+
         self.video_recorders = [
             VideoRecorderCfg(
                 source="visualizer:newton_gl",
-                output_dir=None,
+                output_dir="/workspace/isaaclab/logs/videos",
                 video_length=200,
                 video_interval=2000,
             ),
@@ -85,6 +90,6 @@ class G1RoughPerceptionEnvCfg_PLAY(G1RoughPerceptionEnvCfg):
         self.commands.base_velocity.ranges.heading = (0.0, 0.0)
         self.sim.visualizer_cfgs = [
             NewtonGLVisualizerCfg(eye=(0.0, -4.0, 1.0)),
-            NewtonRTXVisualizerCfg(eye=(0.0, -4.0, 1.0)),
+            # NewtonRTXVisualizerCfg(eye=(0.0, -4.0, 1.0)),
         ]
         self.video_recorders = []

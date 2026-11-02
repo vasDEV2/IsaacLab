@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import inspect
+import os
 from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
@@ -18,6 +19,7 @@ from prettytable import PrettyTable
 from ..envs.utils.io_descriptors import _warn_io_descriptors_deprecated
 from ..utils import instantiate, modifiers, noise, to_dict
 from ..utils.buffers import CircularBuffer, DelayBuffer
+from .finite_check import check_finite_tensor, sanitize_finite_tensor
 from .manager_base import ManagerBase, ManagerTermBase
 from .manager_term_cfg import ObservationGroupCfg, ObservationTermCfg
 
@@ -67,6 +69,12 @@ class ObservationManager(ManagerBase):
     Ordinary term and custom callback outputs are treated as borrowed. Terms declaring the
     keyword-only parameter ``out=None`` write into a fresh manager allocation. Clipping and scaling create
     independent storage when needed, allowing subsequent processing to reuse that storage.
+
+    For RSL-RL training, pass ``--check_finite`` to check action, reward, and observation values,
+    or ``--check_observation_finite`` to check only observation terms. Use ``--sanitize_nonfinite``
+    to replace non-finite values with zero instead. Other callers can set
+    ``ISAACLAB_CHECK_FINITE=1``, ``ISAACLAB_CHECK_OBSERVATION_FINITE=1``, or
+    ``ISAACLAB_SANITIZE_NONFINITE=1``.
     """
 
     def __init__(self, cfg: object, env: ManagerBasedEnv):
@@ -87,6 +95,11 @@ class ObservationManager(ManagerBase):
 
         # call the base class constructor (this will parse the terms config)
         super().__init__(cfg, env)
+        self._check_finite = (
+            os.environ.get("ISAACLAB_CHECK_FINITE") == "1" or os.environ.get("ISAACLAB_CHECK_OBSERVATION_FINITE") == "1"
+        )
+        self._sanitize_nonfinite = os.environ.get("ISAACLAB_SANITIZE_NONFINITE") == "1"
+        self._nonfinite_warnings: set[str] = set()
 
         # compute combined vector for obs group
         self._group_obs_dim: dict[str, tuple[int, ...] | list[tuple[int, ...]]] = {}
@@ -459,12 +472,26 @@ class ObservationManager(ManagerBase):
             if term_cfg.scale is not None:
                 obs = obs.mul_(term_cfg.scale) if owned else obs * term_cfg.scale
                 owned = True
+            if self._sanitize_nonfinite:
+                safe_obs = sanitize_finite_tensor(
+                    obs, f"Observation term '{group_name}/{term_name}'", self._nonfinite_warnings
+                )
+                if safe_obs is not obs:
+                    obs = safe_obs
+                    owned = True
             if term_name in self._group_obs_term_delay_buffer[group_name]:
                 obs = self._group_obs_term_delay_buffer[group_name][term_name].compute(
                     obs, update_history=update_history
                 )
                 # the delay buffer returns storage independent of its history
                 owned = True
+            if self._sanitize_nonfinite:
+                safe_obs = sanitize_finite_tensor(
+                    obs, f"Observation term '{group_name}/{term_name}' delayed output", self._nonfinite_warnings
+                )
+                if safe_obs is not obs:
+                    obs = safe_obs
+                    owned = True
             # Update the history buffer if observation term has history enabled
             if term_cfg.history_length > 0:
                 circular_buffer = self._group_obs_term_history_buffer[group_name][term_name]
@@ -486,6 +513,8 @@ class ObservationManager(ManagerBase):
                 else:
                     obs = circular_buffer.buffer
                 owned = False
+            if self._check_finite:
+                check_finite_tensor(obs, f"Observation term '{group_name}/{term_name}'")
             # Secure borrowed storage before another term can overwrite it, including shared scratch buffers.
             group_obs[term_name] = obs if owned else obs.clone()
 

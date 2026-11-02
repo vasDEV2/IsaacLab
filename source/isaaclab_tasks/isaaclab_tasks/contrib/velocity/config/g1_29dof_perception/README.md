@@ -118,6 +118,10 @@ These are starting weights from the reference's gentler configuration, not a
 validated optimum for this task. They add gait balance and stair-impact feedback
 without prescribing a fixed gait phase. The existing clearance reward remains.
 
+Terrain-aware rewards use only finite scanner hits within 0.3 m of the root for
+base height, or within 0.3 m of each foot for clearance and stance-foot angle.
+They do not average or fit terrain across the full scanner grid.
+
 ## Inspect attention
 
 With a loaded runner and environment:

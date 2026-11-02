@@ -84,7 +84,8 @@ class G1RoughPerceptionPPORunnerCfg(CompositionalRunnerCfg):
             mirror_loss_coeff=0.1,
         ),
     )
-    logger = "tensorboard"
+    # logger = "tensorboard"
+    logger = "wandb"
     experiment_name = "g1_29dof_perception_ame_rough"
     wandb_project = "g1_29dof_perception_ame"
 

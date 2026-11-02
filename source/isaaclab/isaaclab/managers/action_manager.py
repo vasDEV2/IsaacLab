@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import inspect
+import os
 import re
 from abc import abstractmethod
 from collections.abc import Sequence
@@ -18,6 +19,7 @@ from prettytable import PrettyTable
 
 from ..envs.utils.io_descriptors import GenericActionIODescriptor, _warn_io_descriptors_deprecated
 from ..utils import index_fill_, instantiate
+from .finite_check import check_finite_tensor, sanitize_finite_tensor
 from .manager_base import ManagerBase, ManagerTermBase
 from .manager_term_cfg import ActionTermCfg
 
@@ -213,6 +215,9 @@ class ActionManager(ManagerBase):
 
         # call the base class constructor (this prepares the terms)
         super().__init__(cfg, env)
+        self._check_finite = os.environ.get("ISAACLAB_CHECK_FINITE") == "1"
+        self._sanitize_nonfinite = os.environ.get("ISAACLAB_SANITIZE_NONFINITE") == "1"
+        self._nonfinite_warnings: set[str] = set()
         # fixed once the terms are built
         self._action_term_dim = [term.action_dim for term in self._terms.values()]
         self._total_action_dim = sum(self._action_term_dim)
@@ -389,15 +394,35 @@ class ActionManager(ManagerBase):
         # check if action dimension is valid
         if self.total_action_dim != action.shape[1]:
             raise ValueError(f"Invalid action shape, expected: {self.total_action_dim}, received: {action.shape[1]}.")
+        if self._check_finite:
+            check_finite_tensor(action, "Incoming action tensor from the policy")
+        if self._sanitize_nonfinite:
+            action = sanitize_finite_tensor(action, "Incoming action tensor from the policy", self._nonfinite_warnings)
         # store the input actions
         self._prev_action[:] = self._action
         self._action[:] = action.to(self.device)
 
         # split the actions and apply to each tensor
         idx = 0
-        for term in self._terms.values():
+        for term_name, term in self._terms.items():
             term_actions = action[:, idx : idx + term.action_dim]
             term.process_actions(term_actions)
+            if self._check_finite:
+                check_finite_tensor(term.raw_actions, f"Action term '{term_name}' raw actions")
+                check_finite_tensor(term.processed_actions, f"Action term '{term_name}' processed actions")
+            if self._sanitize_nonfinite:
+                safe_raw_actions = sanitize_finite_tensor(
+                    term.raw_actions, f"Action term '{term_name}' raw actions", self._nonfinite_warnings
+                )
+                if safe_raw_actions is not term.raw_actions:
+                    term.raw_actions.copy_(safe_raw_actions)
+                safe_processed_actions = sanitize_finite_tensor(
+                    term.processed_actions,
+                    f"Action term '{term_name}' processed actions",
+                    self._nonfinite_warnings,
+                )
+                if safe_processed_actions is not term.processed_actions:
+                    term.processed_actions.copy_(safe_processed_actions)
             idx += term.action_dim
 
     def apply_action(self) -> None:

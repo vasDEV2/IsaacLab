@@ -17,7 +17,7 @@ import isaaclab_tasks.core.velocity.mdp as mdp
 from isaaclab_tasks.contrib.velocity.config.g1_29dof_rigid.mdp import symmetry
 
 from ..mdp.depth import depth_image
-from ..mdp.observations import elevation_map, lidar_point_cloud
+from ..mdp.observations import elevation_map, finite_base_ang_vel, lidar_point_cloud
 from ..mdp.symmetry import mirror_elevation_map
 from .action_cfg import G1ActionsCfg
 
@@ -59,7 +59,7 @@ class PolicyCfg(ObsGroup):
     """Observations for policy group."""
 
     base_ang_vel = MirrorObsTerm(
-        func=mdp.base_ang_vel,
+        func=finite_base_ang_vel,
         mirror=mirror_vec3,
         mirror_params={"axial": True},
         noise=Unoise(n_min=-0.2, n_max=0.2),
@@ -99,7 +99,9 @@ class PolicyCfg(ObsGroup):
 class CriticCfg(ObsGroup):
     """Observations for policy group."""
 
-    base_ang_vel = MirrorObsTerm(func=mdp.base_ang_vel, mirror=mirror_vec3, mirror_params={"axial": True}, scale=0.25)
+    base_ang_vel = MirrorObsTerm(
+        func=finite_base_ang_vel, mirror=mirror_vec3, mirror_params={"axial": True}, scale=0.25
+    )
     base_quat = MirrorObsTerm(func=mdp.root_quat_w, mirror=mirror_quat, params={"make_quat_unique": True})
     joint_pos = MirrorObsTerm(
         func=mdp.joint_pos_rel,
@@ -129,13 +131,13 @@ class CriticCfg(ObsGroup):
 @configclass
 class PolicyHistoryCfg(PolicyCfg):
     def __post_init__(self):
-        self.history_length = 10
+        self.history_length = 1
 
 
 @configclass
 class CriticHistoryCfg(CriticCfg):
     def __post_init__(self):
-        self.history_length = 10
+        self.history_length = 1
 
 
 @configclass
@@ -185,7 +187,7 @@ class PrivilegedObsCfg(ObsGroup):
 @configclass
 class PrivilegedHistoryCfg(PrivilegedObsCfg):
     def __post_init__(self):
-        self.history_length = 10
+        self.history_length = 1
 
 
 @configclass

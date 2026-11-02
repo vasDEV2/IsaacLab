@@ -255,17 +255,29 @@ def foot_clearance_reward(
     std: float,
     tanh_mult: float,
     standing_position_foot_z: float = 0.039,
+    command_name: str | None = None,
+    command_threshold: float = 0.05,
+    foot_speed_threshold: float = 0.05,
 ) -> torch.Tensor:
-    """Reward the swinging feet for clearing a specified height off the ground, weighted by foot velocity."""
+    """Reward the swinging feet for clearing a specified height off the ground, weighted by foot velocity.
+
+    If ``command_name`` is given, the reward is 0 while a non-zero planar velocity is commanded
+    (norm of xy command > ``command_threshold``) and all feet are still (planar speed <= ``foot_speed_threshold``),
+    and is unchanged otherwise.
+    """
     asset: RigidObject = env.scene[asset_cfg.name]  # type: ignore
     foot_z_target_error = torch.square(
         asset.data.body_pos_w.torch[:, asset_cfg.body_ids, 2] - (target_height + standing_position_foot_z)
     )
-    foot_velocity_tanh = torch.tanh(
-        tanh_mult * torch.norm(asset.data.body_lin_vel_w.torch[:, asset_cfg.body_ids, :2], dim=2)
-    )
+    foot_speed = torch.norm(asset.data.body_lin_vel_w.torch[:, asset_cfg.body_ids, :2], dim=2)
+    foot_velocity_tanh = torch.tanh(tanh_mult * foot_speed)
     reward = foot_z_target_error * foot_velocity_tanh
     reward = torch.exp(-torch.sum(reward, dim=1) / std)
+    if command_name is not None:
+        command_speed = torch.linalg.vector_norm(env.command_manager.get_command(command_name)[:, :2], dim=-1)
+        commanded_to_move = command_speed > command_threshold
+        feet_still = (foot_speed <= foot_speed_threshold).all(dim=-1)
+        reward = reward * ~(commanded_to_move & feet_still)
     return reward
 
 
