@@ -97,7 +97,7 @@ class G1WaypointRewardsCfg(G1RewardsCfg):
         func=waypoint_mdp.waypoint_progress, weight=2.0, params={"command_name": "waypoint", "max_speed": 1.0}
     )
     waypoint_bearing = RewTerm(
-        func=waypoint_mdp.waypoint_bearing_exp, weight=1.0, params={"command_name": "waypoint", "std": 0.5}
+        func=waypoint_mdp.waypoint_bearing_linear, weight=1.0, params={"command_name": "waypoint"}
     )
     waypoint_stand_still = RewTerm(
         func=waypoint_mdp.waypoint_stand_still, weight=-1.0, params={"command_name": "waypoint"}

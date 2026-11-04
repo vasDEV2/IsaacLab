@@ -9,7 +9,7 @@ from .curriculums import terrain_levels_waypoint
 from .events import reset_root_at_waypoint_start
 from .observations import root_pos_tile_b
 from .rewards import (
-    waypoint_bearing_exp,
+    waypoint_bearing_linear,
     waypoint_height_exp,
     waypoint_position_exp,
     waypoint_progress,

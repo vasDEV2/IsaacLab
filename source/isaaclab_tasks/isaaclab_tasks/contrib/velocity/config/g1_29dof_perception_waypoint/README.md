@@ -45,8 +45,8 @@ reports 0.8 m/s toward the waypoint and zero within the 0.3 m reach radius. It i
 | --- | ---: | --- |
 | `waypoint_position`, `waypoint_position_fine` | 4, 4 | `exp(-‖e‖² / std²)` of the 3D error, std 2.0 m and 0.5 m |
 | `waypoint_height` | 2 | `exp(-e_z² / 0.1²)` within the reach radius |
-| `waypoint_progress` | 2 | Rate the horizontal distance shrinks, clipped to ±1 m/s |
-| `waypoint_bearing` | 1 | Facing the waypoint while away from it |
+| `waypoint_progress` | 2 | Rate the horizontal distance shrinks, clipped to ±1 m/s; approach scaled by `max(cos(yaw error), 0)` |
+| `waypoint_bearing` | 1 | `1 - abs(yaw error) / π` while away from it |
 | `waypoint_stand_still` | -1 | Planar speed and yaw rate within the reach radius |
 
 Velocity and heading tracking, the world-height target, and the zero-weight posture term are removed; the

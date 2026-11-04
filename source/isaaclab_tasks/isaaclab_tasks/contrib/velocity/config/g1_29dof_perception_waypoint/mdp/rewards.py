@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import math
 from typing import TYPE_CHECKING
 
 import torch
@@ -31,10 +32,14 @@ def waypoint_height_exp(env: ManagerBasedRLEnv, command_name: str, std: float) -
     return torch.exp(-command.height_error.square() / std**2) * command.at_waypoint
 
 
-def waypoint_bearing_exp(env: ManagerBasedRLEnv, command_name: str, std: float) -> torch.Tensor:
-    """Face the waypoint while away from it: ``exp(-yaw_error^2 / std^2)`` [rad], zero within the reach radius."""
+def waypoint_bearing_linear(env: ManagerBasedRLEnv, command_name: str) -> torch.Tensor:
+    """Face the waypoint while away from it: ``1 - |yaw_error| / pi``, zero within the reach radius.
+
+    The slope is the same at every yaw error, so a robot facing away is still rewarded for turning toward
+    the waypoint; an exponential kernel is flat far from zero error.
+    """
     command: WaypointCommand = env.command_manager.get_term(command_name)
-    return torch.exp(-command.bearing_error.square() / std**2) * ~command.at_waypoint
+    return (1.0 - command.bearing_error.abs() / math.pi) * ~command.at_waypoint
 
 
 def waypoint_stand_still(env: ManagerBasedRLEnv, command_name: str) -> torch.Tensor:
@@ -48,7 +53,9 @@ def waypoint_stand_still(env: ManagerBasedRLEnv, command_name: str) -> torch.Ten
 class waypoint_progress(ManagerTermBase):
     """Rate [m/s] at which the horizontal distance to the waypoint shrinks, clipped to ``max_speed``.
 
-    It is zero on the first step of an episode and once within the reach radius.
+    Approach is scaled by ``max(cos(yaw_error), 0)``, so only walking toward the waypoint while facing it
+    earns the full reward and walking backward or sideways earns none. Moving away is penalized whatever
+    the heading. It is zero on the first step of an episode and once within the reach radius.
     """
 
     def __init__(self, cfg: RewardTermCfg, env: ManagerBasedRLEnv):
@@ -65,6 +72,8 @@ class waypoint_progress(ManagerTermBase):
         command: WaypointCommand = env.command_manager.get_term(command_name)
         distance = command.distance_xy
         rate = ((self._previous - distance) / env.step_dt).clamp(-max_speed, max_speed)
+        facing = torch.cos(command.bearing_error).clamp_min(0.0)
+        rate = torch.where(rate > 0.0, rate * facing, rate)
         rate = torch.where(self._fresh | command.at_waypoint, 0.0, rate)
         self._previous[:] = distance
         self._fresh[:] = False
