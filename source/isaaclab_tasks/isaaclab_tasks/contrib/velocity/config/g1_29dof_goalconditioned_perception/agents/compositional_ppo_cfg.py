@@ -55,6 +55,7 @@ class G1RoughGoalConditionedPerceptionPPORunnerCfg(CompositionalRunnerCfg):
             num_heads=16,
             cnn_channels=16,
             cnn_downsample=True,
+            # BatchNorm statistics differ between rollouts and minibatch updates, which breaks the PPO ratio.
             cnn_normalization="batch",
             attach_global=False,
             hidden_dims=[],

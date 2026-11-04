@@ -50,7 +50,7 @@ class G1RoughPerceptionEnvCfg(ManagerBasedRLEnvCfg):
         self.scene.contact_forces.update_period = self.sim.dt
         # self.sim.visualizer_cfgs = [
         #     NewtonGLVisualizerCfg(eye=(12.0, 0.0, 6.0), headless=False),
-        # #     # NewtonRTXVisualizerCfg(eye=(12.0, 0.0, 6.0), headless=False),
+        # # #     # NewtonRTXVisualizerCfg(eye=(12.0, 0.0, 6.0), headless=False),
         # ]
 
         self.sim.visualizer_cfgs = []

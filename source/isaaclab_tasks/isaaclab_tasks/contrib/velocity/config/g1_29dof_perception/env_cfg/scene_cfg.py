@@ -43,7 +43,7 @@ class G1PerceptionSceneCfg(InteractiveSceneCfg):
             curriculum=True,
             sub_terrains={"stairs": _STAIRS_CURRICULUM_CFG},
         ),
-        max_init_terrain_level=19,
+        max_init_terrain_level=0,
         collision_group=-1,
         physics_material=sim_utils.RigidBodyMaterialCfg(
             friction_combine_mode="multiply",

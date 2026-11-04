@@ -69,7 +69,7 @@ class PolicyCfg(ObsGroup):
         mirror=mirror_vec3,
         mirror_params={"axial": True},
         noise=Unoise(n_min=-0.2, n_max=0.2),
-        scale=0.25,
+        scale=1.0,
     )
     projected_gravity = MirrorObsTerm(
         func=mdp.projected_gravity, mirror=mirror_vec3, noise=Unoise(n_min=-0.05, n_max=0.05)
@@ -87,7 +87,7 @@ class PolicyCfg(ObsGroup):
         mirror_params={"joint_names": ACTIVE_JOINTS},
         noise=Unoise(n_min=-1.5, n_max=1.5),
         params={"asset_cfg": SceneEntityCfg("robot", joint_names=ACTIVE_JOINTS, preserve_order=True)},
-        scale=0.05,
+        scale=1.0,
     )
     actions = MirrorObsTerm(
         func=mdp.last_action,
@@ -116,7 +116,7 @@ class CriticCfg(ObsGroup):
     """Privileged state for the critic: the episode type, the reference (zero in task episodes), and body poses."""
 
     base_ang_vel = MirrorObsTerm(
-        func=finite_base_ang_vel, mirror=mirror_vec3, mirror_params={"axial": True}, scale=0.25
+        func=finite_base_ang_vel, mirror=mirror_vec3, mirror_params={"axial": True}, scale=1.0
     )
     projected_gravity = MirrorObsTerm(func=mdp.projected_gravity, mirror=mirror_vec3)
     joint_pos = MirrorObsTerm(
@@ -130,7 +130,7 @@ class CriticCfg(ObsGroup):
         mirror=symmetry.mirror_g1_joints,
         mirror_params={"joint_names": ACTIVE_JOINTS},
         params={"asset_cfg": SceneEntityCfg("robot", joint_names=ACTIVE_JOINTS, preserve_order=True)},
-        scale=0.05,
+        scale=1.0,
     )
     actions = MirrorObsTerm(
         func=mdp.last_action,
