@@ -82,7 +82,7 @@ class G1WaypointRewardsCfg(G1RewardsCfg):
     track_ang_vel_z = None
     track_heading = None
     root_height_world = None
-    joint_deviation = None
+    # joint_deviation = None
 
     waypoint_position = RewTerm(
         func=waypoint_mdp.waypoint_position_exp, weight=4.0, params={"command_name": "waypoint", "std": 2.0}
