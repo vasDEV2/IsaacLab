@@ -3,7 +3,7 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Reflection of the AME task's structured XYZ elevation map."""
+"""Reflection of the AME task's structured XYZ elevation map and its destination command."""
 
 import torch
 
@@ -18,3 +18,13 @@ def mirror_elevation_map(data: torch.Tensor) -> torch.Tensor:
     if data.ndim < 3 or data.shape[-1] != 3:
         raise ValueError("Elevation-map reflection requires (..., nx, ny, 3) XYZ data.")
     return data.flip(-2) * data.new_tensor((1.0, -1.0, 1.0))
+
+
+def mirror_goal(data: torch.Tensor) -> torch.Tensor:
+    """Reflect the ``(x, y, z, sin, cos)`` destination command across the yaw-frame XZ plane.
+
+    Negate the lateral offset and the sine of the yaw error.
+    """
+    if data.shape[-1] != 5:
+        raise ValueError(f"Expected a five-component destination command, got {data.shape}.")
+    return data * data.new_tensor((1.0, -1.0, 1.0, -1.0, 1.0))

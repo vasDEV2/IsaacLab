@@ -97,14 +97,21 @@ def motion_stairs_terrain(difficulty: float, cfg: MotionStairsTerrainCfg) -> tup
     """Ground plane plus the terrain boxes stored with the motion clip, in the clip's own frame.
 
     The returned origin is the clip frame's origin (on the ground), so reference root poses map to the
-    world by adding the environment origin only. ``difficulty`` is ignored: the clip fixes the geometry.
+    world by adding the environment origin only. Without ``clip_offset``, the boxes' XY bounds are centered
+    in the tile. ``difficulty`` is ignored: the clip fixes the geometry.
     """
     with np.load(cfg.motion_file, allow_pickle=False) as data:
         positions = data["terrain_position"]
         dimensions = data["terrain_dimension"]
         quats = data.get("terrain_quat")
         ground = float(data["ground_height"]) if "ground_height" in data else 0.0
-    origin = np.array((cfg.size[0] / 2.0 + cfg.clip_offset[0], cfg.size[1] / 2.0 + cfg.clip_offset[1], 0.0))
+    if cfg.clip_offset is None:
+        lower = (positions[:, :2] - dimensions[:, :2] / 2.0).min(axis=0)
+        upper = (positions[:, :2] + dimensions[:, :2] / 2.0).max(axis=0)
+        offset = -(lower + upper) / 2.0
+    else:
+        offset = np.asarray(cfg.clip_offset)
+    origin = np.array((cfg.size[0] / 2.0 + offset[0], cfg.size[1] / 2.0 + offset[1], 0.0))
     meshes = [make_plane(cfg.size, ground, center_zero=False)]
     for i, (position, dimension) in enumerate(zip(positions, dimensions)):
         transform = trimesh.transformations.translation_matrix(origin + position)
@@ -124,5 +131,5 @@ class MotionStairsTerrainCfg(SubTerrainBaseCfg):
     motion_file: str = MISSING
     """Path to the motion NPZ holding ``terrain_position`` and ``terrain_dimension`` box arrays."""
 
-    clip_offset: tuple[float, float] = (-0.7, 0.0)
-    """XY placement [m] of the clip frame origin relative to the sub-terrain center."""
+    clip_offset: tuple[float, float] | None = None
+    """XY placement [m] of the clip frame origin relative to the sub-terrain center; None centers the boxes."""

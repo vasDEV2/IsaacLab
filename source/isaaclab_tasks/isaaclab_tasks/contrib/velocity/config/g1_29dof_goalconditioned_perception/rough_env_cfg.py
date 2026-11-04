@@ -3,7 +3,7 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Perceptive G1 stair climbing guided by a motion-library reference clip."""
+"""Perceptive G1 goal-conditioned stair climbing, trained with reference-imitation and goal-reaching episodes."""
 
 from isaaclab_visualizers.newton import NewtonGLVisualizerCfg
 
@@ -23,12 +23,11 @@ from .env_cfg import (
     G1RewardsCfg,
     G1TerminationsCfg,
 )
-from .env_cfg.motion_cfg import STAIR_MOTION_DURATION_S
 
 
 @configclass
 class G1RoughGoalConditionedPerceptionEnvCfg(ManagerBasedRLEnvCfg):
-    """AME height-map-driven stair climbing on the clip's staircase, with a critic-only motion prior."""
+    """Climb the reference pyramid to a destination root pose, observed through the AME height map."""
 
     scene: G1PerceptionSceneCfg = G1PerceptionSceneCfg(num_envs=128, env_spacing=2.5)
     observations: G1PerceptionObservationsCfg = G1PerceptionObservationsCfg()
@@ -43,8 +42,8 @@ class G1RoughGoalConditionedPerceptionEnvCfg(ManagerBasedRLEnvCfg):
 
     def __post_init__(self):
         self.decimation = 4
-        # one pass through the clip; ``motion_end`` fires on its last frame, before this time-out
-        self.episode_length_s = STAIR_MOTION_DURATION_S + 0.5
+        # imitation episodes end on the clip's last frame (7.48 s); task episodes run to this time-out
+        self.episode_length_s = 10.0
         self.sim.dt = 0.005
         self.sim.render_interval = self.decimation
         self.sim.physics_material = self.scene.terrain.physics_material
@@ -72,7 +71,7 @@ class G1RoughGoalConditionedPerceptionEnvCfg(ManagerBasedRLEnvCfg):
 
 @configclass
 class G1RoughGoalConditionedPerceptionEnvCfg_PLAY(G1RoughGoalConditionedPerceptionEnvCfg):
-    """Small, deterministic-command evaluation scene."""
+    """Task-only evaluation from the full range of standing starts and destinations."""
 
     def __post_init__(self):
         super().__post_init__()
@@ -82,9 +81,11 @@ class G1RoughGoalConditionedPerceptionEnvCfg_PLAY(G1RoughGoalConditionedPercepti
         # self.scene.terrain.terrain_generator.curriculum = False
         # self.scene.terrain.max_init_terrain_level = None
         self.observations.policy.enable_corruption = False
-        self.events.push_robot = None
-        self.commands.motion.random_start = False
-        self.commands.motion.root_y_range = (0.0, 0.0)
+        self.commands.motion.imitation_probability = 0.0
+        self.commands.motion.task_reset_curriculum = False
+        self.commands.motion.debug_vis = True
+        self.curriculum.task_resets = None
+        self.events.reset_joints.params["position_range"] = (0.0, 0.0)
         self.sim.visualizer_cfgs = [
             NewtonGLVisualizerCfg(eye=(0.0, -4.0, 1.0)),
             # NewtonRTXVisualizerCfg(eye=(0.0, -4.0, 1.0)),

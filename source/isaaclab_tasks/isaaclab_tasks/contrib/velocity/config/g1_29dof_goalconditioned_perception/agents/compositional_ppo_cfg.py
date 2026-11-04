@@ -3,7 +3,7 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""AME height-map PPO with a critic-only motion prior, using the compositional RSL-RL library."""
+"""AME height-map PPO for goal-conditioned stair climbing, using the compositional RSL-RL library."""
 
 from compositional_rsl_rl.algorithm import CompositionalPPOAlgorithmCfg
 from compositional_rsl_rl.loss import LossesCfg
@@ -35,13 +35,13 @@ class G1RoughGoalConditionedPerceptionPPORunnerCfg(CompositionalRunnerCfg):
     networks = G1PerceptionNetworksCfg(
         actor=ActorHeadCfg(
             input=["policy", "command", "map_encoder"],
-            hidden_dims=[256, 128],
+            hidden_dims=[512, 256, 128],
             activation="elu",
-            obs_normalization=True,
+            obs_normalization=False,
             distribution_cfg=ActorHeadCfg.GaussianDistributionCfg(init_std=1.0),
         ),
         critic=CriticHeadCfg(
-            input=["critic", "privileged", "motion_prior", "command", "map_encoder"],
+            input=["critic", "command", "map_encoder"],
             hidden_dims=[512, 256, 128],
             activation="elu",
             obs_normalization=False,
@@ -79,7 +79,7 @@ class G1RoughGoalConditionedPerceptionPPORunnerCfg(CompositionalRunnerCfg):
         max_grad_norm=1.0,
         symmetry_cfg=RslRlSymmetryCfg(
             use_data_augmentation=True,
-            use_mirror_loss=False,
+            use_mirror_loss=True,
             data_augmentation_func=compute_mirrored_states,
             mirror_loss_coeff=0.1,
         ),

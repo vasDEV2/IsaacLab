@@ -3,7 +3,7 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""G1 stair climbing with attention-based height-map encoding and a critic-only motion prior."""
+"""G1 goal-conditioned stair climbing with AME height-map encoding, from imitation and task episodes."""
 
 import gymnasium as gym
 

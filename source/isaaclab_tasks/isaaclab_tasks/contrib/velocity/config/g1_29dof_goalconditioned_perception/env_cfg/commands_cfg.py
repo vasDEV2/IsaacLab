@@ -5,35 +5,33 @@
 
 from isaaclab.utils.configclass import configclass
 
-import isaaclab_tasks.contrib.velocity.config.g1_29dof_rigid.mdp as g1_mdp
-
-from ..mdp.motion import StairMotionCommandCfg
-from .motion_cfg import STAIR_MOTION_FILE, STAIR_MOTION_FORWARD_SPEED
+from ..mdp.motion import GoalMotionCommandCfg
+from .motion_cfg import FOOT_BODY_NAMES, STAIR_MOTION_FILES, TRACKED_BODY_NAMES
 
 
 @configclass
 class G1CommandsCfg:
-    """Command specifications for the MDP."""
+    """A destination root pose, with imitation and task episodes sampled on a schedule."""
 
-    # Declared first: its reset writes the reference state that the velocity command's heading reset reads.
-    motion = StairMotionCommandCfg(
+    motion = GoalMotionCommandCfg(
         asset_name="robot",
-        motion_file=STAIR_MOTION_FILE,
-        min_remaining_time_s=1.0,
-        root_y_range=(-0.1, 0.1),
-    )
-    # The clip climbs straight along +X at a fixed pace: no standing, lateral, or turning commands.
-    base_velocity = g1_mdp.UniformVelocityYawCommandCfg(
-        asset_name="robot",
-        resampling_time_range=(10.0, 10.0),
-        rel_standing_envs=0.0,
-        rel_heading_envs=1.0,
-        heading_command=False,
-        heading_control_stiffness=0.5,
-        debug_vis=True,
-        ranges=g1_mdp.UniformVelocityYawCommandCfg.Ranges(
-            lin_vel_x=(STAIR_MOTION_FORWARD_SPEED, STAIR_MOTION_FORWARD_SPEED),
-            lin_vel_y=(0.0, 0.0),
-            ang_vel_z=(0.0, 0.0),
-        ),
+        motion_files=STAIR_MOTION_FILES,
+        body_names=TRACKED_BODY_NAMES,
+        anchor_body_name="torso_link",
+        foot_body_names=FOOT_BODY_NAMES,
+        # imitation only for 5,000 iterations, then down to half the episodes over the next 5,000
+        warmup_steps=120_000,
+        transition_steps=120_000,
+        final_imitation_probability=0.5,
+        # expand toward standing starts only after successful, non-failing task episodes
+        task_reset_curriculum=True,
+        task_start_offset=(-0.9, 0.0, 0.0),
+        initial_position_noise=0.3,
+        initial_yaw_noise=0.3,
+        # move the reference endpoint safely into the 2.5 m square landing
+        task_goal_offset_initial=(0.2, 0.0, 0.0),
+        task_goal_offset=(0.75, 0.0, 0.0),
+        goal_position_noise=0.35,
+        task_velocity_probability=0.5,
+        task_velocity_range={"x": (-0.15, 0.15), "y": (-0.15, 0.15), "yaw": (-0.2, 0.2)},
     )

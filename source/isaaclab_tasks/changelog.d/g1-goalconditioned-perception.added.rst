@@ -1,3 +1,3 @@
-* Added ``IsaacContrib-Velocity-Rough-G1-29dof-GoalConditioned-Perception``: G1 AME stair climbing on
-  the motion-library ``kimodo/supplied_stairs`` staircase, with a critic-only motion prior, a joint-position
-  imitation reward, and reference state initialization from the clip.
+* Added ``IsaacContrib-Velocity-Rough-G1-29dof-GoalConditioned-Perception``: AME G1 stair climbing to a
+  destination root pose on a four-sided pyramid, trained with reference-imitation and goal-reaching episodes,
+  a success-based start curriculum, and four vendored Kimodo pyramid stair clips.

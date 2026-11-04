@@ -286,7 +286,7 @@ class G1RewardsCfg:
     dof_pos_limits = RewTerm(func=mdp.joint_pos_limits, weight=-2.0, params={"asset_cfg": SceneEntityCfg("robot")})
     joint_deviation = RewTerm(
         func=g1_mdp.variable_posture_l1,
-        weight=-1.0,
+        weight=-0.0,
         params={
             "asset_cfg": SceneEntityCfg("robot", joint_names=".*"),
             "command_name": "base_velocity",

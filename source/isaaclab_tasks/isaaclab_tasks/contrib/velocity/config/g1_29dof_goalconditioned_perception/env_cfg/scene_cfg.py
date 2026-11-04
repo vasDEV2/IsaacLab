@@ -16,11 +16,12 @@ from isaaclab.utils.configclass import configclass
 from isaaclab_assets import UNITREE_G1_29DOF_BOX_FOOT_CFG
 
 from ..mdp.terrains import MotionStairsTerrainCfg
-from .motion_cfg import STAIR_MOTION_FILE
+from .motion_cfg import STAIR_MOTION_FILES
 from .sensors_cfg import DEPTH_CAMERA_CFG, elevation_grid_pattern
 
-# Every tile holds the clip's own staircase, so reference root poses are valid at every environment origin.
-_MOTION_STAIRS_CFG = MotionStairsTerrainCfg(size=(8.0, 8.0), motion_file=STAIR_MOTION_FILE)
+# Every tile holds the clips' shared 4.5 m pyramid, centered with a margin for standing starts up to 1.2 m outside
+# it, so reference root poses are valid at every environment origin.
+_MOTION_STAIRS_CFG = MotionStairsTerrainCfg(size=(9.0, 9.0), motion_file=STAIR_MOTION_FILES[0])
 
 
 @configclass
@@ -31,7 +32,7 @@ class G1PerceptionSceneCfg(InteractiveSceneCfg):
         prim_path="/World/ground",
         terrain_type="generator",
         terrain_generator=TerrainGeneratorCfg(
-            size=(8.0, 8.0),
+            size=(9.0, 9.0),
             border_width=5.0,
             num_rows=5,
             num_cols=10,

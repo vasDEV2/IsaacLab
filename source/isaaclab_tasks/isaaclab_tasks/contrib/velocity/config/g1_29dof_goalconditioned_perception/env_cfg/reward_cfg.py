@@ -3,227 +3,102 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
-import math
-
 from isaaclab.managers import RewardTermCfg as RewTerm
 from isaaclab.managers import SceneEntityCfg
 from isaaclab.utils.configclass import configclass
 
-import isaaclab_tasks.contrib.velocity.config.g1_29dof_rigid.mdp as g1_mdp
-import isaaclab_tasks.contrib.velocity.config.vel_mdp as vel_mdp
 import isaaclab_tasks.core.velocity.mdp as mdp
 
-from ..mdp.motion import motion_joint_pos_exp
-from ..mdp.stair_rewards import feet_stumble
-from .observation_cfg import ACTIVE_JOINTS
+from ..mdp import rewards as goal_rewards
+from .motion_cfg import END_EFFECTOR_BODY_NAMES, FOOT_BODY_NAMES
 
 
 @configclass
 class G1RewardsCfg:
-    """Reward terms for the MDP."""
+    """Reference tracking in imitation episodes, destination rewards in task episodes, and shared regularization."""
 
-    track_lin_vel_xy = RewTerm(
-        func=mdp.track_lin_vel_xy_yaw_frame_exp,
-        weight=4.0,
-        params={"command_name": "base_velocity", "std": math.sqrt(0.5)},
+    # -- imitation episodes: track the reference
+    motion_global_anchor_pos = RewTerm(
+        func=goal_rewards.motion_anchor_pos_exp, weight=2.0, params={"command_name": "motion", "std": 0.3}
     )
-    track_ang_vel_z = RewTerm(
-        func=mdp.track_ang_vel_z_world_exp, weight=1.0, params={"command_name": "base_velocity", "std": math.sqrt(0.5)}
+    motion_global_anchor_ori = RewTerm(
+        func=goal_rewards.motion_anchor_ori_exp, weight=2.0, params={"command_name": "motion", "std": 0.4}
     )
-    track_heading = RewTerm(
-        func=g1_mdp.track_heading_world_exp,
-        weight=4.0,
-        params={"asset_cfg": SceneEntityCfg("robot"), "command_name": "base_velocity", "std": math.sqrt(0.5)},
+    motion_global_anchor_lin_vel = RewTerm(
+        func=goal_rewards.motion_anchor_lin_vel_exp, weight=1.0, params={"command_name": "motion", "std": 1.0}
     )
-    termination_penalty = RewTerm(func=mdp.is_terminated, weight=-200.0)
-    undesired_contacts = RewTerm(
-        func=mdp.undesired_contacts,
-        weight=-1.0,
-        params={"sensor_cfg": SceneEntityCfg("contact_forces", body_names="(?!.*ankle.*).*"), "threshold": 1.0},
+    motion_global_anchor_ang_vel = RewTerm(
+        func=goal_rewards.motion_anchor_ang_vel_exp, weight=1.0, params={"command_name": "motion", "std": 3.14}
     )
-
-    action_rate_l2_lower_body = RewTerm(func=g1_mdp.action_rate_l2, weight=-0.01, params={"joint_idx": list(range(12))})
-    action_rate_l2_upper_body = RewTerm(
-        func=g1_mdp.action_rate_l2, weight=-0.05, params={"joint_idx": list(range(12, 29))}
+    motion_body_pos = RewTerm(
+        func=goal_rewards.motion_body_pos_exp, weight=1.0, params={"command_name": "motion", "std": 0.3}
     )
-    energy = RewTerm(func=g1_mdp.energy, weight=-0.001)
-    dof_vel_l2 = RewTerm(func=mdp.joint_vel_l2, weight=-0.0002)
-    dof_acc_l2 = RewTerm(func=mdp.joint_acc_l2, weight=-2.5e-07)
-    dof_pos_limits = RewTerm(func=mdp.joint_pos_limits, weight=-2.0, params={"asset_cfg": SceneEntityCfg("robot")})
-    joint_deviation = RewTerm(
-        func=g1_mdp.variable_posture_l1,
-        weight=-1.0,
-        params={
-            "asset_cfg": SceneEntityCfg("robot", joint_names=".*"),
-            "command_name": "base_velocity",
-            "weight_standing": {
-                ".*hip_pitch.*": 0.02,
-                ".*hip_roll.*": 0.3,
-                ".*hip_yaw.*": 0.08,
-                ".*knee.*": 0.02,
-                ".*ankle_pitch.*": 0.02,
-                ".*ankle_roll.*": 0.02,
-                ".*(waist|shoulder|elbow|wrist).*": 1.0,
-            },
-            "weight_walking": {
-                ".*hip_pitch.*": 0.02,
-                ".*hip_roll.*": 0.3,
-                ".*hip_yaw.*": 0.08,
-                ".*knee.*": 0.02,
-                ".*ankle_pitch.*": 0.02,
-                ".*ankle_roll.*": 0.02,
-                ".*waist_yaw.*": 0.15,
-                ".*waist_roll.*": 2.0,
-                ".*waist_pitch.*": 2.0,
-                ".*shoulder_pitch.*": 0.5,
-                ".*elbow.*": 0.25,
-                ".*shoulder_roll.*": 0.4,
-                ".*shoulder_yaw.*": 0.35,
-                ".*wrist.*": 0.5,
-            },
-            "weight_running": {
-                ".*hip_pitch.*": 0.005,
-                ".*hip_roll.*": 0.3,
-                ".*hip_yaw.*": 0.08,
-                ".*knee.*": 0.005,
-                ".*ankle_pitch.*": 0.01,
-                ".*ankle_roll.*": 0.01,
-                ".*waist_yaw.*": 0.15,
-                ".*waist_roll.*": 2.0,
-                ".*waist_pitch.*": 2.0,
-                ".*shoulder_pitch.*": 0.5,
-                ".*elbow.*": 0.25,
-                ".*shoulder_roll.*": 0.4,
-                ".*shoulder_yaw.*": 0.35,
-                ".*wrist.*": 0.5,
-            },
-            "walking_threshold": 0.05,
-            "running_threshold": 2.0,
-        },
+    motion_body_ori = RewTerm(
+        func=goal_rewards.motion_body_ori_exp, weight=1.0, params={"command_name": "motion", "std": 0.4}
+    )
+    motion_feet_lin_vel = RewTerm(
+        func=goal_rewards.motion_body_lin_vel_exp,
+        weight=1.0,
+        params={"command_name": "motion", "std": 1.0, "body_names": FOOT_BODY_NAMES},
     )
 
-    base_height = RewTerm(
-        func=mdp.base_height_l2,
-        weight=-10.0,
-        params={"target_height": 0.75, "sensor_cfg": SceneEntityCfg("height_scanner")},
-    )
-    flat_orientation_l2 = RewTerm(func=mdp.flat_orientation_l2, weight=-10.0)
-    lin_vel_z_l2 = RewTerm(func=mdp.lin_vel_z_l2, weight=-1.0)
-    ang_vel_xy_l2 = RewTerm(func=mdp.ang_vel_xy_l2, weight=-0.05)
-    feet_roll = RewTerm(
-        func=g1_mdp.reward_feet_roll,
-        weight=-1.0,
-        params={"asset_cfg": SceneEntityCfg("robot", body_names=[".*ankle_roll.*"], preserve_order=True)},
-    )
-    feet_roll_diff = RewTerm(
-        func=g1_mdp.reward_feet_roll_diff,
-        weight=-1.0,
-        params={"asset_cfg": SceneEntityCfg("robot", body_names=[".*ankle_roll.*"], preserve_order=True)},
-    )
-    stance_foot_angle_penalty = RewTerm(
-        func=g1_mdp.stance_foot_angle_penalty,
-        weight=-8.0,
-        params={
-            "height_sensor_cfg": SceneEntityCfg("height_scanner"),
-            "angle_tolerance": 0.0,
-            "sensor_cfg": SceneEntityCfg("contact_forces", body_names=[".*ankle_roll.*"], preserve_order=True),
-            "asset_cfg": SceneEntityCfg("robot", body_names=[".*ankle_roll.*"], preserve_order=True),
-        },
-    )
-
-    feet_air_time = RewTerm(
-        func=g1_mdp.feet_air_time_positive_biped,
+    # -- task episodes: reach the destination with the reference's local limb motion
+    task_motion_style = RewTerm(
+        func=goal_rewards.TaskMotionStyle,
         weight=2.0,
         params={
-            "command_name": "base_velocity",
-            "sensor_cfg": SceneEntityCfg("contact_forces", body_names=".*ankle_roll.*"),
-            "threshold": 0.5,
-            "velocity_threshold": 0.05,
+            "command_name": "motion",
+            "body_names": END_EFFECTOR_BODY_NAMES,
+            "joint_pos_std": 0.35,
+            "joint_vel_std": 1.5,
+            "body_pos_std": 0.15,
+            "phase_rates": (0.5, 0.75, 1.0, 1.25),
+            "stationary_velocity_threshold": 0.1,
         },
     )
-    feet_air_time_variance = RewTerm(
-        func=mdp.feet_air_time_variance,
-        weight=-0.7,
-        params={
-            "command_name": "base_velocity",
-            "sensor_cfg": SceneEntityCfg("contact_forces", body_names=".*_ankle_roll_link"),
-            "max_time": 0.5,
-        },
+    goal_position = RewTerm(
+        func=goal_rewards.goal_position_exp, weight=4.0, params={"command_name": "motion", "std": 2.0}
     )
-    feet_stumble = RewTerm(
-        func=feet_stumble,
-        weight=-2.0,
-        params={"sensor_cfg": SceneEntityCfg("contact_forces", body_names=".*_ankle_roll_link")},
+    goal_position_fine = RewTerm(
+        func=goal_rewards.goal_position_exp, weight=4.0, params={"command_name": "motion", "std": 0.5}
     )
-    break_contact = RewTerm(
-        func=g1_mdp.break_contact_penalty,
-        weight=-0.5,
-        params={
-            "command_name": "base_velocity",
-            "sensor_cfg": SceneEntityCfg("contact_forces", body_names=".*ankle_roll.*"),
-            "command_threshold": 0.05,
-            "recovery_linear_velocity": 0.2,
-            "recovery_angular_velocity": 0.5,
-            "recovery_tilt": 0.2,
-        },
+    goal_heading = RewTerm(
+        func=goal_rewards.goal_heading_exp, weight=2.0, params={"command_name": "motion", "std": 0.5}
     )
-    no_fly = RewTerm(
-        func=g1_mdp.fly,
-        weight=-2.0,
-        params={
-            "sensor_cfg": SceneEntityCfg("contact_forces", body_names=".*ankle_roll.*"),
-            "threshold": 5.0,
-            "command_name": "base_velocity",
-            "velocity_threshold": 1.0,
-        },
+    goal_settle = RewTerm(func=goal_rewards.goal_settle, weight=-0.5, params={"command_name": "motion"})
+    goal_joint_deviation = RewTerm(
+        func=goal_rewards.goal_joint_deviation_l1,
+        weight=-1.0,
+        params={"command_name": "motion", "asset_cfg": SceneEntityCfg("robot", joint_names=".*")},
     )
 
+    # -- both episode types
+    alive = RewTerm(func=mdp.is_alive, weight=1.0)
+    joint_acc = RewTerm(func=mdp.joint_acc_l2, weight=-2.5e-7)
+    joint_torque = RewTerm(func=mdp.joint_torques_l2, weight=-1.0e-5)
+    action_rate_l2 = RewTerm(func=mdp.action_rate_l2, weight=-0.1)
+    joint_limit = RewTerm(
+        func=mdp.joint_pos_limits, weight=-10.0, params={"asset_cfg": SceneEntityCfg("robot", joint_names=".*")}
+    )
+    undesired_contacts = RewTerm(
+        func=mdp.undesired_contacts,
+        weight=-0.1,
+        params={
+            "sensor_cfg": SceneEntityCfg(
+                "contact_forces",
+                body_names=[
+                    r"^(?!left_ankle_roll_link$)(?!right_ankle_roll_link$)"
+                    r"(?!left_wrist_yaw_link$)(?!right_wrist_yaw_link$).+$"
+                ],
+            ),
+            "threshold": 1.0,
+        },
+    )
     feet_slide = RewTerm(
         func=mdp.feet_slide,
         weight=-0.25,
         params={
             "sensor_cfg": SceneEntityCfg("contact_forces", body_names=".*_ankle_roll_link"),
             "asset_cfg": SceneEntityCfg("robot", body_names=".*_ankle_roll_link"),
-        },
-    )
-    foot_distance = RewTerm(
-        func=g1_mdp.reward_foot_lateral_symmetry,
-        weight=-2.0,
-        params={
-            "ref_dist": 0.2,
-            "asset_cfg": SceneEntityCfg("robot", body_names=".*_ankle_roll_link", preserve_order=True),
-        },
-    )
-    contact_impulse = RewTerm(
-        func=g1_mdp.reward_soft_landing,
-        weight=-0.005,
-        params={
-            "sensor_cfg": SceneEntityCfg("contact_forces", body_names=".*ankle_roll.*"),
-            "command_name": "base_velocity",
-            "command_threshold": 0.05,
-        },
-    )
-
-    foot_clearance = RewTerm(
-        func=vel_mdp.foot_clearance_reward,
-        weight=5.0,
-        params={
-            "target_height": 0.1,
-            "std": 0.05,
-            "tanh_mult": 2.0,
-            "asset_cfg": SceneEntityCfg("robot", body_names=".*_ankle_roll_link"),
-            "standing_position_foot_z": 0.03539,
-            "height_sensor_cfg": SceneEntityCfg("height_scanner"),
-        },
-    )
-    # root_height_world (world Z held at 0.75 m) is removed: the clip climbs the pelvis to ~1.96 m.
-
-    motion_joint_pos = RewTerm(
-        func=motion_joint_pos_exp,
-        weight=3.0,
-        params={
-            "command_name": "motion",
-            "std": 0.25,
-            "asset_cfg": SceneEntityCfg("robot", joint_names=ACTIVE_JOINTS, preserve_order=True),
         },
     )

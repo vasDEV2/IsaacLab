@@ -3,21 +3,50 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Stair-climbing reference clip shared by the command, observations, rewards, and terrain."""
+"""Pyramid stair clips and body sets shared by the command, observations, rewards, and terrain."""
 
-import os
 from pathlib import Path
 
-# Kimodo ``supplied_stairs``: 174 frames at 50 Hz (3.48 s), six ~0.19 m rises over ~0.2 m treads, 1.2 m wide,
-# climbed along +X at ~0.33 m/s from the ground to a 1.15 m platform. The clip data is not vendored; by default it
-# is read from a motion_library checkout next to IsaacLab (https://github.com/jnskkmhr/motion_library).
-STAIR_MOTION_FILE = os.environ.get(
-    "G1_STAIR_MOTION_FILE",
-    str(Path(__file__).resolve().parents[8].parent / "motion_library/data/kimodo/supplied_stairs/motion.npz"),
-)
+STAIR_MOTION_DIR = Path(__file__).resolve().parents[1] / "data" / "supplied_stairs_pyramid_stand"
 
-STAIR_MOTION_DURATION_S = 3.48
-"""Clip length [s]; episodes end on the clip's last frame before this time-out."""
+# Kimodo ``supplied_stairs`` rotated to the four sides of one pyramid (2.5 m square top landing), each followed by
+# a two-second settling transition and a two-second standing hold: 374 frames at 50 Hz (7.48 s). All four clips
+# share the pyramid geometry stored in their ``terrain_*`` fields.
+STAIR_MOTION_FILES = [str(STAIR_MOTION_DIR / f"motion_yaw_{yaw:03d}.npz") for yaw in (0, 90, 180, 270)]
 
-STAIR_MOTION_FORWARD_SPEED = 0.33
-"""Mean horizontal pelvis speed [m/s] along +X over the clip."""
+TRACKED_BODY_NAMES = [
+    "pelvis",
+    "left_hip_pitch_link",
+    "left_hip_roll_link",
+    "left_hip_yaw_link",
+    "left_knee_link",
+    "left_ankle_pitch_link",
+    "left_ankle_roll_link",
+    "right_hip_pitch_link",
+    "right_hip_roll_link",
+    "right_hip_yaw_link",
+    "right_knee_link",
+    "right_ankle_pitch_link",
+    "right_ankle_roll_link",
+    "waist_yaw_link",
+    "waist_roll_link",
+    "torso_link",
+    "left_shoulder_pitch_link",
+    "left_shoulder_roll_link",
+    "left_shoulder_yaw_link",
+    "left_elbow_link",
+    "left_wrist_roll_link",
+    "left_wrist_pitch_link",
+    "left_wrist_yaw_link",
+    "right_shoulder_pitch_link",
+    "right_shoulder_roll_link",
+    "right_shoulder_yaw_link",
+    "right_elbow_link",
+    "right_wrist_roll_link",
+    "right_wrist_pitch_link",
+    "right_wrist_yaw_link",
+]
+"""Reference bodies tracked by the imitation rewards and observed by the critic."""
+
+FOOT_BODY_NAMES = ["left_ankle_roll_link", "right_ankle_roll_link"]
+END_EFFECTOR_BODY_NAMES = [*FOOT_BODY_NAMES, "left_wrist_yaw_link", "right_wrist_yaw_link"]

@@ -20,7 +20,7 @@ from .sensors_cfg import DEPTH_CAMERA_CFG, elevation_grid_pattern
 
 # flat -> up 1 -> down 1 -> up 2 -> ... -> full pyramid; rows of the generator map 1:1 to these levels
 _STAIRS_CURRICULUM_CFG = StairsCurriculumTerrainCfg(
-    size=(8.0, 8.0), border_width=2.0, step_height_range=(0.10, 0.10), step_width=0.30, platform_width=1.2
+    size=(8.0, 8.0), border_width=2.0, step_height_range=(0.20, 0.20), step_width=0.30, platform_width=1.2
 )
 
 

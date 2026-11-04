@@ -48,7 +48,7 @@ class G1ActionsCfg:
             "right_wrist_pitch_joint",
             "right_wrist_yaw_joint",
         ],
-        scale=0.25,
+        scale=0.2,
         use_default_offset=True,
         preserve_order=True,
     )

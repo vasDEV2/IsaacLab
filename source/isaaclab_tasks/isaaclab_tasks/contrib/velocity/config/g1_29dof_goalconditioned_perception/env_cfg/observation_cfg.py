@@ -10,17 +10,22 @@ from isaaclab.utils.configclass import configclass
 from isaaclab.utils.noise import UniformNoiseCfg as Unoise
 
 from isaaclab_contrib.mdp import MirrorObservationTermCfg as MirrorObsTerm
-from isaaclab_contrib.mdp import mirror_identity, mirror_quat, mirror_vec3
+from isaaclab_contrib.mdp import mirror_identity, mirror_vec3
 
-import isaaclab_tasks.contrib.velocity.config.g1_29dof_rigid.mdp as g1_mdp
 import isaaclab_tasks.core.velocity.mdp as mdp
+from isaaclab_tasks.contrib.mimic.mdp.symmetry import (
+    mirror_body_orientations,
+    mirror_body_positions,
+    mirror_rotation_6d,
+)
 from isaaclab_tasks.contrib.velocity.config.g1_29dof_rigid.mdp import symmetry
 
+from ..mdp import motion_observations
 from ..mdp.depth import depth_image
-from ..mdp.motion import motion_joint_pos_error, motion_phase, motion_ref_joint_pos_rel, motion_ref_joint_vel
 from ..mdp.observations import elevation_map, finite_base_ang_vel, lidar_point_cloud
-from ..mdp.symmetry import mirror_elevation_map
+from ..mdp.symmetry import mirror_elevation_map, mirror_goal
 from .action_cfg import G1ActionsCfg
+from .motion_cfg import TRACKED_BODY_NAMES
 
 ACTIVE_JOINTS = [
     "left_hip_pitch_joint",
@@ -57,7 +62,7 @@ ACTIVE_JOINTS = [
 
 @configclass
 class PolicyCfg(ObsGroup):
-    """Observations for policy group."""
+    """Proprioception for the actor and the attention query."""
 
     base_ang_vel = MirrorObsTerm(
         func=finite_base_ang_vel,
@@ -93,17 +98,27 @@ class PolicyCfg(ObsGroup):
     def __post_init__(self):
         self.enable_corruption = True
         self.concatenate_terms = True
-        self.history_length = 1
+
+
+@configclass
+class CommandCfg(ObsGroup):
+    """Destination XYZ in the robot yaw frame and sine/cosine of its yaw error, for both heads."""
+
+    goal = MirrorObsTerm(func=mdp.generated_commands, mirror=mirror_goal, params={"command_name": "motion"})
+
+    def __post_init__(self):
+        self.enable_corruption = False
+        self.concatenate_terms = True
 
 
 @configclass
 class CriticCfg(ObsGroup):
-    """Observations for policy group."""
+    """Privileged state for the critic: the episode type, the reference (zero in task episodes), and body poses."""
 
     base_ang_vel = MirrorObsTerm(
         func=finite_base_ang_vel, mirror=mirror_vec3, mirror_params={"axial": True}, scale=0.25
     )
-    base_quat = MirrorObsTerm(func=mdp.root_quat_w, mirror=mirror_quat, params={"make_quat_unique": True})
+    projected_gravity = MirrorObsTerm(func=mdp.projected_gravity, mirror=mirror_vec3)
     joint_pos = MirrorObsTerm(
         func=mdp.joint_pos_rel,
         mirror=symmetry.mirror_g1_joints,
@@ -122,108 +137,40 @@ class CriticCfg(ObsGroup):
         mirror=symmetry.mirror_g1_joints,
         mirror_params={"joint_names": G1ActionsCfg().joint_pos.joint_names},
     )
-
-    def __post_init__(self):
-        self.enable_corruption = False
-        self.concatenate_terms = True
-        self.history_length = 1
-
-
-@configclass
-class PolicyHistoryCfg(PolicyCfg):
-    def __post_init__(self):
-        self.history_length = 1
-
-
-@configclass
-class CriticHistoryCfg(CriticCfg):
-    def __post_init__(self):
-        self.history_length = 1
-
-
-@configclass
-class CommandCfg(ObsGroup):
-    """Observations for command group."""
-
-    velocity_commands = MirrorObsTerm(
-        func=mdp.generated_commands, mirror=symmetry.mirror_velocity_heading, params={"command_name": "base_velocity"}
+    imitation_mode = MirrorObsTerm(
+        func=motion_observations.imitation_mode, mirror=mirror_identity, params={"command_name": "motion"}
     )
-
-    def __post_init__(self):
-        self.enable_corruption = False
-        self.concatenate_terms = True
-
-
-@configclass
-class PrivilegedObsCfg(ObsGroup):
-    """Observations for policy group."""
-
+    reference_joint_pos = MirrorObsTerm(
+        func=motion_observations.reference_joint_pos,
+        mirror=symmetry.mirror_g1_joints,
+        mirror_params={"joint_names": ACTIVE_JOINTS},
+        params={
+            "command_name": "motion",
+            "asset_cfg": SceneEntityCfg("robot", joint_names=ACTIVE_JOINTS, preserve_order=True),
+        },
+    )
+    reference_phase = MirrorObsTerm(
+        func=motion_observations.reference_phase, mirror=mirror_identity, params={"command_name": "motion"}
+    )
+    reference_anchor_pos_b = MirrorObsTerm(
+        func=motion_observations.reference_anchor_pos_b, mirror=mirror_vec3, params={"command_name": "motion"}
+    )
+    reference_anchor_ori_b = MirrorObsTerm(
+        func=motion_observations.reference_anchor_ori_b, mirror=mirror_rotation_6d, params={"command_name": "motion"}
+    )
+    body_pos = MirrorObsTerm(
+        func=motion_observations.robot_body_pos_b,
+        mirror=mirror_body_positions,
+        mirror_params={"body_names": TRACKED_BODY_NAMES},
+        params={"command_name": "motion"},
+    )
+    body_ori = MirrorObsTerm(
+        func=motion_observations.robot_body_ori_b,
+        mirror=mirror_body_orientations,
+        mirror_params={"body_names": TRACKED_BODY_NAMES},
+        params={"command_name": "motion"},
+    )
     base_lin_vel = MirrorObsTerm(func=mdp.base_lin_vel, mirror=mirror_vec3)
-    foot_height = MirrorObsTerm(
-        func=g1_mdp.foot_height,
-        mirror=symmetry.mirror_foot_scalars,
-        params={"asset_cfg": SceneEntityCfg("robot", body_names=".*_ankle_roll_link")},
-    )
-    foot_contact = MirrorObsTerm(
-        func=g1_mdp.foot_contact,
-        mirror=symmetry.mirror_foot_scalars,
-        params={"sensor_cfg": SceneEntityCfg("contact_forces", body_names=".*_ankle_roll_link"), "threshold": 5.0},
-    )
-    foot_contact_force = MirrorObsTerm(
-        func=g1_mdp.foot_contact_forces,
-        mirror=symmetry.mirror_foot_forces,
-        params={"sensor_cfg": SceneEntityCfg("contact_forces", body_names=".*_ankle_roll_link")},
-    )
-    foot_air_time = MirrorObsTerm(
-        func=g1_mdp.foot_air_time,
-        mirror=symmetry.mirror_foot_scalars,
-        params={"sensor_cfg": SceneEntityCfg("contact_forces", body_names=".*_ankle_roll_link")},
-    )
-
-    def __post_init__(self):
-        self.enable_corruption = False
-        self.concatenate_terms = True
-
-
-@configclass
-class PrivilegedHistoryCfg(PrivilegedObsCfg):
-    def __post_init__(self):
-        self.history_length = 1
-
-
-@configclass
-class MotionPriorCfg(ObsGroup):
-    """Privileged stair-climbing reference for the critic only; the actor never sees the clip."""
-
-    ref_joint_pos = MirrorObsTerm(
-        func=motion_ref_joint_pos_rel,
-        mirror=symmetry.mirror_g1_joints,
-        mirror_params={"joint_names": ACTIVE_JOINTS},
-        params={
-            "command_name": "motion",
-            "asset_cfg": SceneEntityCfg("robot", joint_names=ACTIVE_JOINTS, preserve_order=True),
-        },
-    )
-    ref_joint_vel = MirrorObsTerm(
-        func=motion_ref_joint_vel,
-        mirror=symmetry.mirror_g1_joints,
-        mirror_params={"joint_names": ACTIVE_JOINTS},
-        params={
-            "command_name": "motion",
-            "asset_cfg": SceneEntityCfg("robot", joint_names=ACTIVE_JOINTS, preserve_order=True),
-        },
-        scale=0.05,
-    )
-    joint_pos_error = MirrorObsTerm(
-        func=motion_joint_pos_error,
-        mirror=symmetry.mirror_g1_joints,
-        mirror_params={"joint_names": ACTIVE_JOINTS},
-        params={
-            "command_name": "motion",
-            "asset_cfg": SceneEntityCfg("robot", joint_names=ACTIVE_JOINTS, preserve_order=True),
-        },
-    )
-    phase = MirrorObsTerm(func=motion_phase, mirror=mirror_identity, params={"command_name": "motion"})
 
     def __post_init__(self):
         self.enable_corruption = False
@@ -276,11 +223,9 @@ class ElevationMapCfg(ObsGroup):
 class G1PerceptionObservationsCfg:
     """Task-owned observation groups for the perception actor and privileged critic."""
 
-    policy: PolicyHistoryCfg = PolicyHistoryCfg()
-    critic: CriticHistoryCfg = CriticHistoryCfg()
+    policy: PolicyCfg = PolicyCfg()
     command: CommandCfg = CommandCfg()
-    privileged: PrivilegedHistoryCfg = PrivilegedHistoryCfg()
-    motion_prior: MotionPriorCfg = MotionPriorCfg()
+    critic: CriticCfg = CriticCfg()
     elevation_map: ElevationMapCfg = ElevationMapCfg()
 
 

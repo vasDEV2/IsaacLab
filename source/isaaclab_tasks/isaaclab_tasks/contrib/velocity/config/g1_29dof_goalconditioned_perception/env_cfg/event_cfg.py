@@ -7,31 +7,36 @@ from isaaclab.managers import EventTermCfg as EventTerm
 from isaaclab.managers import SceneEntityCfg
 from isaaclab.utils.configclass import configclass
 
+import isaaclab_tasks.contrib.mimic.mdp as mimic_mdp
 import isaaclab_tasks.core.velocity.mdp as mdp
+
+from ..mdp.events import reset_goal_joint_state, reset_goal_root_state
 
 
 @configclass
 class G1EventCfg:
     """Configuration for events."""
 
+    # startup
     physics_material = EventTerm(
         func=mdp.randomize_rigid_body_material,
         mode="startup",
         params={
             "asset_cfg": SceneEntityCfg("robot", body_names=".*"),
-            "static_friction_range": (0.6, 1.0),
-            "dynamic_friction_range": (0.4, 0.6),
-            "restitution_range": (0.0, 0.0),
+            "static_friction_range": (0.3, 1.6),
+            "dynamic_friction_range": (0.3, 1.2),
+            "restitution_range": (0.0, 0.5),
             "num_buckets": 64,
         },
     )
-    add_base_mass = EventTerm(
-        func=mdp.randomize_rigid_body_mass,
+    add_joint_default_pos = EventTerm(
+        func=mimic_mdp.randomize_joint_default_pos,
         mode="startup",
         params={
-            "asset_cfg": SceneEntityCfg("robot", body_names="torso_link"),
-            "mass_distribution_params": (-5.0, 5.0),
+            "asset_cfg": SceneEntityCfg("robot", joint_names=".*"),
+            "pos_distribution_params": (-0.01, 0.01),
             "operation": "add",
+            "joint_action_name": "joint_pos",
         },
     )
     base_com = EventTerm(
@@ -39,26 +44,12 @@ class G1EventCfg:
         mode="startup",
         params={
             "asset_cfg": SceneEntityCfg("robot", body_names="torso_link"),
-            "com_range": {"x": (-0.05, 0.05), "y": (-0.05, 0.05), "z": (-0.01, 0.01)},
+            "com_range": {"x": (-0.025, 0.025), "y": (-0.05, 0.05), "z": (-0.05, 0.05)},
         },
     )
 
-    # reset_base and reset_robot_joints are replaced by the motion command's reference state initialization.
-    scale_actuator_gains = EventTerm(
-        func=mdp.randomize_actuator_gains,
-        mode="reset",
-        params={
-            "asset_cfg": SceneEntityCfg("robot", joint_names=".*"),
-            "operation": "scale",
-            "distribution": "uniform",
-            "stiffness_distribution_params": (0.75, 1.25),
-            "damping_distribution_params": (0.75, 1.25),
-        },
+    # reset: both events draw the new episode from the motion command before the command manager resets
+    reset_joints = EventTerm(
+        func=reset_goal_joint_state, mode="reset", params={"command_name": "motion", "position_range": (-0.1, 0.1)}
     )
-
-    push_robot = EventTerm(
-        func=mdp.push_by_setting_velocity,
-        mode="interval",
-        interval_range_s=(10.0, 15.0),
-        params={"velocity_range": {"x": (-1.0, 1.0), "y": (-1.0, 1.0)}},
-    )
+    reset_base = EventTerm(func=reset_goal_root_state, mode="reset", params={"command_name": "motion"})
