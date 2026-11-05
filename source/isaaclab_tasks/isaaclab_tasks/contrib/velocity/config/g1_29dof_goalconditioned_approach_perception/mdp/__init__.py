@@ -6,7 +6,7 @@
 """Approach-phase command, reset, termination, curriculum, and observation terms."""
 
 from .approach import APPROACH, CLIMB, PHASE_NAMES, WALK, ApproachMotionCommand, ApproachMotionCommandCfg
-from .curriculums import approach_stats, climbed_task_terrain_levels
+from .curriculums import approach_stats
 from .events import reset_at_spawn
-from .observations import approach_phase, mirror_heading, root_pos_tile_b, target_heading
-from .terminations import approach_time_out, climb_time_out
+from .observations import approach_phase, root_pos_tile_b
+from .terminations import approach_time_out

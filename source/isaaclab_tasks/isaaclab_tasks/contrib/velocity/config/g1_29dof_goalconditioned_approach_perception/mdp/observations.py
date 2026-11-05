@@ -37,19 +37,3 @@ def root_pos_tile_b(env: ManagerBasedRLEnv, command_name: str) -> torch.Tensor:
     data = command.robot.data
     position = data.root_pos_w.torch - command.tile_center_w
     return math_utils.quat_apply_inverse(math_utils.yaw_quat(data.root_quat_w.torch), position)
-
-
-def target_heading(env: ManagerBasedRLEnv, command_name: str) -> torch.Tensor:
-    """Sine and cosine of the yaw error to the active target's heading. Shape is (num_envs, 2).
-
-    The actor's command is position only, as in the waypoint task; this gives the critic the heading that the
-    climb's ``goal_heading`` reward scores.
-    """
-    command: ApproachMotionCommand = env.command_manager.get_term(command_name)
-    error = command.heading_error_target
-    return torch.stack((error.sin(), error.cos()), dim=-1)
-
-
-def mirror_heading(data: torch.Tensor) -> torch.Tensor:
-    """Reflect a ``(sin, cos)`` yaw error across the root XZ plane."""
-    return data * data.new_tensor((-1.0, 1.0))

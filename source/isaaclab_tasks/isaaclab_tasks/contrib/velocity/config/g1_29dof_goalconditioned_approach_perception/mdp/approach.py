@@ -114,16 +114,6 @@ class ApproachMotionCommand(GoalMotionCommand):
         return math_utils.quat_apply_inverse(root_yaw, target_pos - self.robot.data.root_pos_w.torch)
 
     @property
-    def heading_error_target(self) -> torch.Tensor:
-        """Yaw [rad] from the root heading to the active target's heading, in [-pi, pi]. Shape is (N,)."""
-        climbing = (self.episode_phase == CLIMB).unsqueeze(-1)
-        target_quat = torch.where(climbing, self.goal_quat_w, self.waypoint_quat_w)
-        return math_utils.wrap_to_pi(
-            math_utils.euler_xyz_from_quat(target_quat)[2]
-            - math_utils.euler_xyz_from_quat(self.robot.data.root_quat_w.torch)[2]
-        )
-
-    @property
     def tile_center_w(self) -> torch.Tensor:
         """Tile center on the flat ground [m] in the world frame. Shape is (N, 3)."""
         center = self._env.scene.env_origins.clone()

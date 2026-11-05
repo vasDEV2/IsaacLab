@@ -8,9 +8,9 @@
 * Until 1500 iterations (:data:`~.mdp.WALK`): every episode spawns at a random place in front of the pyramid and
   walks to the first reference root pose, with the ``g1_29dof_perception_waypoint`` rewards and terminations.
 * From then on, episodes spawn the same way and walk to the same waypoint without reward (:data:`~.mdp.APPROACH`).
-  Once there (:data:`~.mdp.CLIMB`), the ``g1_29dof_goalconditioned_perception`` episode starts on the clip's first
-  frame with that task's rewards and terminations: imitation only at first, then from 4500 iterations the split
-  into imitation and task episodes with the task stair height curriculum.
+  Once there (:data:`~.mdp.CLIMB`), a ``g1_29dof_goalconditioned_perception`` imitation episode starts on the clip's
+  first frame with that task's imitation rewards and terminations. There are no task episodes and no stair
+  curriculum: every tile holds the clips' own pyramid.
 
 Each source task's terms are wrapped in
 :class:`~isaaclab_tasks.contrib.velocity.config.g1_29dof_perception_motion_style.mdp.ModeGated` under a ``walk_`` or
@@ -43,6 +43,9 @@ from isaaclab_tasks.contrib.velocity.config.g1_29dof_goalconditioned_perception.
 from isaaclab_tasks.contrib.velocity.config.g1_29dof_goalconditioned_perception.env_cfg.observation_cfg import (
     CriticCfg,
 )
+from isaaclab_tasks.contrib.velocity.config.g1_29dof_goalconditioned_perception.mdp.terrains import (
+    MotionStairsTerrainCfg,
+)
 from isaaclab_tasks.contrib.velocity.config.g1_29dof_goalconditioned_perception.rough_env_cfg import (
     G1RoughGoalConditionedPerceptionEnvCfg,
 )
@@ -62,9 +65,6 @@ STEPS_PER_ITERATION = 24
 
 CLIMB_ITERATION = 1500
 """Iteration from which new episodes approach without reward and then climb."""
-
-TASK_ITERATION = 4500
-"""Iteration from which task episodes and their stair height curriculum start."""
 
 
 def _gated(func, func_params: dict, phases: tuple[int, ...]) -> dict:
@@ -109,18 +109,9 @@ class G1ApproachCommandsCfg:
         anchor_body_name="torso_link",
         foot_body_names=FOOT_BODY_NAMES,
         approach_steps=CLIMB_ITERATION * STEPS_PER_ITERATION,
-        # imitation only until TASK_ITERATION, then down to half the episodes over the next 5,000 iterations
-        warmup_steps=TASK_ITERATION * STEPS_PER_ITERATION,
-        transition_steps=5000 * STEPS_PER_ITERATION,
-        final_imitation_probability=0.5,
-        # imitation on the clips' staircase; task episodes on height-scaled copies, one row up per success
-        imitation_terrain="motion_stairs",
-        task_terrain="task_stairs",
-        task_terrain_curriculum=True,
-        task_max_init_level=0,
-        # move the reference endpoint safely into the 2.5 m square landing
-        task_goal_offset=(0.75, 0.0, 0.0),
-        goal_position_noise=0.35,
+        # every climb imitates the clip; with no task terrain, episodes stay on their tile of the clips' pyramid
+        imitation_probability=1.0,
+        task_terrain=None,
     )
     # gait terms of the waypoint rewards gate on this velocity intent toward the waypoint
     waypoint_gait = waypoint_mdp.WaypointGaitCommandCfg(waypoint_command_name="motion")
@@ -149,11 +140,8 @@ class ApproachCommandObsCfg(WaypointCommandObsCfg):
 
 @configclass
 class ApproachCriticCfg(CriticCfg):
-    """Goal-conditioned critic plus the target heading the actor's command leaves out, and the phase."""
+    """Goal-conditioned critic plus the phase, which decides the reward."""
 
-    target_heading = MirrorObsTerm(
-        func=approach_mdp.target_heading, mirror=approach_mdp.mirror_heading, params={"command_name": "motion"}
-    )
     approach_phase = MirrorObsTerm(
         func=approach_mdp.approach_phase, mirror=mirror_identity, params={"command_name": "motion"}
     )
@@ -172,12 +160,23 @@ class G1ApproachObservationsCfg(climb_cfg.G1PerceptionObservationsCfg):
 Rewards and terminations: each source task's terms, gated by phase.
 """
 
+_TASK_REWARDS = (
+    "task_motion_style",
+    "goal_position",
+    "goal_position_fine",
+    "goal_heading",
+    "goal_settle",
+    "goal_joint_deviation",
+)
+"""Goal-conditioned rewards of task episodes only, which this task does not run."""
+_CLIMB_REWARDS = tuple(name for name in vars(climb_cfg.G1RewardsCfg()) if name not in _TASK_REWARDS)
+
 G1ApproachRewardsCfg = _make_cfg(
     "G1ApproachRewardsCfg",
-    "Waypoint task rewards while walking, goal-conditioned rewards while climbing, and none while approaching.",
+    "Waypoint task rewards while walking, goal-conditioned imitation rewards while climbing, none while approaching.",
     {
         **_gated_terms(G1WaypointRewardsCfg(), "walk", (WALK,), RewTerm),
-        **_gated_terms(climb_cfg.G1RewardsCfg(), "climb", (CLIMB,), RewTerm),
+        **_gated_terms(climb_cfg.G1RewardsCfg(), "climb", (CLIMB,), RewTerm, _CLIMB_REWARDS),
     },
 )
 
@@ -195,11 +194,8 @@ G1ApproachTerminationsCfg = _make_cfg(
             func=approach_mdp.approach_time_out, params={"command_name": "motion", "max_time_s": 10.0}, time_out=True
         ),
         **_gated_terms(climb_cfg.G1TerminationsCfg(), "climb", (APPROACH, CLIMB), DoneTerm, _FALLS),
-        # climb: the goal-conditioned episode ends, as a time-out, on the clip's last frame or 10 s after starting
+        # climb: the imitation episode ends, as a time-out, on the clip's last frame
         **_gated_terms(climb_cfg.G1TerminationsCfg(), "climb", (CLIMB,), DoneTerm, ("motion_end", *_CLIMB_FAILURES)),
-        "climb_time_out": DoneTerm(
-            func=approach_mdp.climb_time_out, params={"command_name": "motion", "max_time_s": 10.0}, time_out=True
-        ),
     },
 )
 
@@ -234,11 +230,9 @@ def _ramp_weight(term_name: str, weight_0: float, weight_1: float) -> CurrTerm:
 
 @configclass
 class G1ApproachCurriculumCfg:
-    """Phase logging, the task stair height curriculum, and the waypoint task's gait weight ramps."""
+    """Phase logging and the waypoint task's gait weight ramps; the stairs have no curriculum."""
 
     approach = CurrTerm(func=approach_mdp.approach_stats, params={"command_name": "motion"})
-    # task episodes that climbed move one row up (taller stairs) after a success and one down otherwise
-    task_terrain_levels = CurrTerm(func=approach_mdp.climbed_task_terrain_levels, params={"command_name": "motion"})
     walk_feet_air_time_weight = _ramp_weight("walk_feet_air_time", 2.0, 5.0)
     walk_foot_clearance_weight = _ramp_weight("walk_foot_clearance", 5.0, 10.0)
 
@@ -268,8 +262,15 @@ class G1RoughGoalConditionedApproachPerceptionEnvCfg(G1RoughGoalConditionedPerce
 
     def __post_init__(self):
         super().__post_init__()
-        # up to 10 s of approach and 10 s of climbing; walking episodes run the full 20 s, as in the waypoint task
+        # up to 10 s of approach and the 7.5 s clip; walking episodes run the full 20 s, as in the waypoint task
         self.episode_length_s = 20.0
+        # every tile holds the clips' own pyramid at its recorded height, with no stair height levels
+        generator = self.scene.terrain.terrain_generator
+        generator.sub_terrains = {
+            "motion_stairs": MotionStairsTerrainCfg(size=(9.0, 9.0), proportion=1.0, motion_file=STAIR_MOTION_FILES[0])
+        }
+        generator.curriculum = False
+        self.scene.terrain.max_init_terrain_level = None
         # the camera follows env 0's robot (the default looks at the world origin, between tiles far from it);
         # a window opens if the goal-conditioned config enables one, otherwise it only serves recordings
         configured = self.sim.visualizer_cfgs
@@ -280,17 +281,14 @@ class G1RoughGoalConditionedApproachPerceptionEnvCfg(G1RoughGoalConditionedPerce
 
 @configclass
 class G1RoughGoalConditionedApproachPerceptionEnvCfg_PLAY(G1RoughGoalConditionedApproachPerceptionEnvCfg):
-    """Task-only evaluation on every stair height, approaching from a random spawn."""
+    """Approach from a random spawn, then imitate the clip."""
 
     def __post_init__(self):
         super().__post_init__()
         self.scene.num_envs = 4
         self.observations.policy.enable_corruption = False
         self.commands.motion.approach_steps = 0
-        self.commands.motion.imitation_probability = 0.0
-        self.commands.motion.task_terrain_curriculum = False
         self.commands.motion.debug_vis = True
-        self.curriculum.task_terrain_levels = None
         self.events.reset_base.params["position_range"] = (0.0, 0.0)
         self.sim.visualizer_cfgs = [_robot_camera(headless=False)]
         self.video_recorders = []

@@ -1,14 +1,14 @@
 # G1 goal-conditioned stair climbing with an approach walk
 
 `IsaacContrib-Velocity-Rough-G1-29dof-GoalConditioned-Approach-Perception` (and `-Play`) trains the
-`g1_29dof_goalconditioned_perception` climb, but every episode first walks from a random spawn to the reference
-clip's first root pose. The climb rewards are only reachable from the foot of the pyramid, which the policy learns
-to reach first.
+`g1_29dof_goalconditioned_perception` imitation climb, but every episode first walks from a random spawn to the
+reference clip's first root pose. The climb rewards are only reachable from the foot of the pyramid, which the
+policy learns to reach first.
 
 ## Terrain and spawns
 
-The scene is the goal-conditioned task's: the clips' own pyramid for imitation episodes and height-scaled copies,
-one stair height per row, for task episodes. Each episode picks one of the four clips (one per pyramid side). The
+Every tile holds the clips' own pyramid at its recorded height; there are no height-scaled copies and no stair
+curriculum. Each episode picks one of the four clips (one per pyramid side). The
 robot spawns at rest with a random yaw, 0.5–2.0 m behind the clip start and up to 2.0 m to either side, on the
 flat ground of that side. The waypoint is the clip's first root position and heading, at 0.75 m above the ground.
 
@@ -18,12 +18,10 @@ flat ground of that side. The waypoint is the clip's first root position and hea
 | --- | --- | --- |
 | 0–1,500 | `walk`: reach the waypoint for the whole 20 s episode | `g1_29dof_perception_waypoint` (`walk_*`) |
 | 1,500 on | `approach`: reach the waypoint, at most 10 s | none, apart from fall terminations |
-| | `climb`: from the waypoint, the goal-conditioned episode starts on clip frame 0 | `g1_29dof_goalconditioned_perception` (`climb_*`) |
+| | `climb`: from the waypoint, imitation of the clip from frame 0 | `g1_29dof_goalconditioned_perception` imitation terms (`climb_*`) |
 
-During climbing, imitation episodes end on the clip's last frame and task episodes 10 s after reaching the
-waypoint. Climbing is imitation only until 4,500 iterations. After that, the imitation probability falls to
-0.5 over 5,000 iterations, and task episodes follow the goal-conditioned stair height curriculum. Only
-task episodes that reached the waypoint move their stair height.
+Climbing always imitates the clip and ends on its last frame. The goal-conditioned task's task-episode rewards
+(`goal_*` and `task_motion_style`) are left out.
 
 ## Observations
 
@@ -34,8 +32,22 @@ The actor has the `g1_29dof_perception_waypoint` inputs:
   frame's origin, 2.3 m from the pyramid center, so the tile center comes from the clips' terrain boxes.
 - `command` (3): the active target relative to the root in the root yaw frame. Before climbing, the target is the
   waypoint at the clip start, 2.33 m from the pyramid center on the clip's side and 0.75 m above the ground (the
-  waypoint task's `base_height`). Once climbing, it is the destination.
+  waypoint task's `base_height`). Once climbing, it is the clip's final root position.
 - The elevation map.
 
-The critic keeps the goal-conditioned inputs and adds the sine and cosine of the target heading error, which the
-climb's `goal_heading` reward scores, plus the one-hot phase.
+The critic keeps the goal-conditioned inputs and adds the one-hot phase.
+
+## Printing rewards during play
+
+`play_rewards.py` plays a checkpoint and prints the reward terms of one environment: the weighted per-step value,
+the episode sum, and the mean over all environments, with its phase and distance to the active target.
+
+```bash
+uv run --no-sync python -m \
+    isaaclab_tasks.contrib.velocity.config.g1_29dof_goalconditioned_approach_perception.play_rewards \
+    --task IsaacContrib-Velocity-Rough-G1-29dof-GoalConditioned-Approach-Perception-Play \
+    --checkpoint /path/to/model.pt --print_env 0 --print_every 25
+```
+
+Play episodes approach and climb; add `--walk` to play the rewarded walk of the first stage instead. Only the
+current phase's terms are listed; `--all_terms` lists every term.
