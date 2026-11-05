@@ -494,8 +494,10 @@ class GoalMotionCommand(CommandTerm):
     def _update_command(self):
         # hold the last frame; ``motion_end`` ends imitation episodes there, task episodes continue
         self.time_steps = torch.minimum(self.time_steps + 1, self.motion_lengths - 1)
+        self._update_relative_bodies()
 
-        # Move the reference bodies under the robot: robot anchor XY and yaw, reference anchor height.
+    def _update_relative_bodies(self):
+        """Move the reference bodies under the robot: robot anchor XY and yaw, reference anchor height."""
         num_bodies = len(self.cfg.body_names)
         anchor_pos = self.anchor_pos_w
         delta_pos = self.robot_anchor_pos_w.clone()
