@@ -217,6 +217,13 @@ Environments.
 """
 
 
+def _robot_camera(headless: bool) -> NewtonGLVisualizerCfg:
+    """Newton GL camera that follows env 0's robot; the default looks at the world origin, far from every tile."""
+    return NewtonGLVisualizerCfg(
+        headless=headless, origin_type="asset", origin_track_path="robot", eye=(-3.0, -3.0, 2.0), lookat=(0.0, 0.0, 0.3)
+    )
+
+
 @configclass
 class G1RoughGoalConditionedApproachPerceptionEnvCfg(G1RoughGoalConditionedPerceptionEnvCfg):
     """Walk from a random spawn to the reference clip's start, then climb the pyramid as the goal-conditioned task."""
@@ -232,6 +239,12 @@ class G1RoughGoalConditionedApproachPerceptionEnvCfg(G1RoughGoalConditionedPerce
         super().__post_init__()
         # up to 10 s of approach and 10 s of climbing; walking episodes run the full 20 s, as in the waypoint task
         self.episode_length_s = 20.0
+        # the camera follows env 0's robot (the default looks at the world origin, between tiles far from it);
+        # a window opens if the goal-conditioned config enables one, otherwise it only serves recordings
+        configured = self.sim.visualizer_cfgs
+        configured = configured if isinstance(configured, list) else [configured]
+        window = any(cfg.visualizer_type == "newton_gl" and not cfg.headless for cfg in configured)
+        self.sim.visualizer_cfgs = [_robot_camera(headless=not window)]
 
 
 @configclass
@@ -248,5 +261,5 @@ class G1RoughGoalConditionedApproachPerceptionEnvCfg_PLAY(G1RoughGoalConditioned
         self.commands.motion.debug_vis = True
         self.curriculum.task_terrain_levels = None
         self.events.reset_base.params["position_range"] = (0.0, 0.0)
-        self.sim.visualizer_cfgs = [NewtonGLVisualizerCfg(eye=(0.0, -4.0, 1.0))]
+        self.sim.visualizer_cfgs = [_robot_camera(headless=False)]
         self.video_recorders = []
