@@ -10,7 +10,7 @@ to reach first.
 The scene is the goal-conditioned task's: the clips' own pyramid for imitation episodes and height-scaled copies,
 one stair height per row, for task episodes. Each episode picks one of the four clips (one per pyramid side). The
 robot spawns at rest with a random yaw, 0.5–2.0 m behind the clip start and up to 2.0 m to either side, on the
-flat ground of that side. The waypoint is the clip's first root pose.
+flat ground of that side. The waypoint is the clip's first root position and heading, at 0.75 m above the ground.
 
 ## Schedule
 
@@ -25,5 +25,17 @@ waypoint. Climbing is imitation only until 4,500 iterations. After that, the imi
 0.5 over 5,000 iterations, and task episodes follow the goal-conditioned stair height curriculum. Only
 task episodes that reached the waypoint move their stair height.
 
-The actor observes one goal `(x, y, z, sin, cos)`: the waypoint before climbing, then the destination. The
-critic also observes the one-hot phase.
+## Observations
+
+The actor has the `g1_29dof_perception_waypoint` inputs:
+
+- `policy` (96): the waypoint task's proprioception, followed by the root position in the root yaw frame. XY is
+  measured from the tile (pyramid) center and Z above the flat ground. The environment origin here is the clip
+  frame's origin, 2.3 m from the pyramid center, so the tile center comes from the clips' terrain boxes.
+- `command` (3): the active target relative to the root in the root yaw frame. Before climbing, the target is the
+  waypoint at the clip start, 2.33 m from the pyramid center on the clip's side and 0.75 m above the ground (the
+  waypoint task's `base_height`). Once climbing, it is the destination.
+- The elevation map.
+
+The critic keeps the goal-conditioned inputs and adds the sine and cosine of the target heading error, which the
+climb's `goal_heading` reward scores, plus the one-hot phase.

@@ -26,6 +26,7 @@ from isaaclab.managers import EventTermCfg as EventTerm
 from isaaclab.managers import RewardTermCfg as RewTerm
 from isaaclab.managers import TerminationTermCfg as DoneTerm
 from isaaclab.utils.configclass import configclass
+from isaaclab.utils.noise import UniformNoiseCfg as Unoise
 
 from isaaclab_contrib.mdp import MirrorObservationTermCfg as MirrorObsTerm
 from isaaclab_contrib.mdp import mirror_identity
@@ -47,7 +48,11 @@ from isaaclab_tasks.contrib.velocity.config.g1_29dof_goalconditioned_perception.
 )
 from isaaclab_tasks.contrib.velocity.config.g1_29dof_perception import env_cfg as walk_cfg
 from isaaclab_tasks.contrib.velocity.config.g1_29dof_perception_motion_style.mdp import ModeGated
-from isaaclab_tasks.contrib.velocity.config.g1_29dof_perception_waypoint.env_cfg import G1WaypointRewardsCfg
+from isaaclab_tasks.contrib.velocity.config.g1_29dof_perception_waypoint.env_cfg import (
+    G1WaypointRewardsCfg,
+    WaypointCommandObsCfg,
+    WaypointPolicyCfg,
+)
 
 from . import mdp as approach_mdp
 from .mdp import APPROACH, CLIMB, WALK
@@ -122,9 +127,33 @@ class G1ApproachCommandsCfg:
 
 
 @configclass
-class ApproachCriticCfg(CriticCfg):
-    """Goal-conditioned critic plus the phase, which decides the reward."""
+class ApproachPolicyCfg(WaypointPolicyCfg):
+    """The waypoint task's actor proprioception, with the root position measured from the pyramid's tile center."""
 
+    root_position = MirrorObsTerm(
+        func=approach_mdp.root_pos_tile_b,
+        mirror=waypoint_mdp.mirror_waypoint,
+        noise=Unoise(n_min=-0.02, n_max=0.02),
+        params={"command_name": "motion"},
+    )
+
+
+@configclass
+class ApproachCommandObsCfg(WaypointCommandObsCfg):
+    """The waypoint task's command: the active target relative to the root, in the root yaw frame [m]."""
+
+    waypoint = MirrorObsTerm(
+        func=mdp.generated_commands, mirror=waypoint_mdp.mirror_waypoint, params={"command_name": "motion"}
+    )
+
+
+@configclass
+class ApproachCriticCfg(CriticCfg):
+    """Goal-conditioned critic plus the target heading the actor's command leaves out, and the phase."""
+
+    target_heading = MirrorObsTerm(
+        func=approach_mdp.target_heading, mirror=approach_mdp.mirror_heading, params={"command_name": "motion"}
+    )
     approach_phase = MirrorObsTerm(
         func=approach_mdp.approach_phase, mirror=mirror_identity, params={"command_name": "motion"}
     )
@@ -132,8 +161,10 @@ class ApproachCriticCfg(CriticCfg):
 
 @configclass
 class G1ApproachObservationsCfg(climb_cfg.G1PerceptionObservationsCfg):
-    """Goal-conditioned observations; the actor's command is the waypoint before climbing, the destination after."""
+    """The waypoint task's actor inputs; the command is the waypoint before climbing, the destination after."""
 
+    policy: ApproachPolicyCfg = ApproachPolicyCfg()
+    command: ApproachCommandObsCfg = ApproachCommandObsCfg()
     critic: ApproachCriticCfg = ApproachCriticCfg()
 
 

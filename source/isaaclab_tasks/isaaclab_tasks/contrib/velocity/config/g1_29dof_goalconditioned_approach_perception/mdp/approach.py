@@ -21,6 +21,7 @@ import math
 from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
+import numpy as np
 import torch
 
 from isaaclab.utils import math as math_utils
@@ -42,8 +43,8 @@ class ApproachMotionCommand(GoalMotionCommand):
     """:class:`GoalMotionCommand` whose episodes begin by walking from a random spawn to the clip's first root pose.
 
     The reference clock holds the first frame until the episode climbs, so imitation always starts from the clip's
-    beginning where the robot arrived. :attr:`command` is the active target in the goal encoding
-    ``(x, y, z, sin, cos)``: the waypoint (first reference root pose) before climbing, the destination after.
+    beginning where the robot arrived. :attr:`command` is the active target position in the root yaw frame, as in the
+    waypoint task: the waypoint (first reference root position) before climbing, the destination after.
 
     The waypoint properties (:attr:`error_w`, :attr:`distance_xy`, :attr:`height_error`, :attr:`bearing_error`,
     :attr:`at_waypoint`) follow :class:`~isaaclab_tasks.contrib.velocity.config.g1_29dof_perception_waypoint.mdp.
@@ -68,6 +69,15 @@ class ApproachMotionCommand(GoalMotionCommand):
         self.spawn_pos_w = torch.zeros(self.num_envs, 3, device=self.device)
         """Spawn position on the ground [m] in the world frame."""
         self.spawn_yaw = torch.zeros(self.num_envs, device=self.device)
+        # all clips share one staircase, whose boxes are centered on the tile (see ``motion_stairs_terrain``)
+        with np.load(cfg.motion_files[0], allow_pickle=False) as data:
+            boxes = np.concatenate((data["terrain_position"], data["terrain_dimension"]), axis=-1)
+            self.ground_height = float(data["ground_height"]) if "ground_height" in data else 0.0
+            """Ground height [m] in the clip frame."""
+        lower = (boxes[:, :2] - boxes[:, 3:5] / 2.0).min(axis=0)
+        upper = (boxes[:, :2] + boxes[:, 3:5] / 2.0).max(axis=0)
+        self.tile_center = torch.tensor((lower + upper) / 2.0, dtype=torch.float32, device=self.device)
+        """Tile (pyramid) center XY [m] in the clip frame. Shape is (2,)."""
         self.waypoint_reached = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
         self._finished_phase = torch.full_like(self.episode_phase, WALK)
         for name in ("waypoint_distance", "waypoint_success"):
@@ -93,21 +103,33 @@ class ApproachMotionCommand(GoalMotionCommand):
 
     @property
     def command(self) -> torch.Tensor:
-        """Active target XYZ [m] in the robot yaw frame, and sine and cosine of its yaw error. Shape is (N, 5).
+        """Active target position [m] relative to the root, in the root yaw frame. Shape is (N, 3).
 
-        The target is the waypoint until the episode climbs and the destination afterwards.
+        The target is the waypoint until the episode climbs and the destination afterwards, encoded like the
+        waypoint task's command.
         """
         climbing = (self.episode_phase == CLIMB).unsqueeze(-1)
         target_pos = torch.where(climbing, self.goal_pos_w, self.waypoint_pos_w)
+        root_yaw = math_utils.yaw_quat(self.robot.data.root_quat_w.torch)
+        return math_utils.quat_apply_inverse(root_yaw, target_pos - self.robot.data.root_pos_w.torch)
+
+    @property
+    def heading_error_target(self) -> torch.Tensor:
+        """Yaw [rad] from the root heading to the active target's heading, in [-pi, pi]. Shape is (N,)."""
+        climbing = (self.episode_phase == CLIMB).unsqueeze(-1)
         target_quat = torch.where(climbing, self.goal_quat_w, self.waypoint_quat_w)
-        root_quat = self.robot.data.root_quat_w.torch
-        error_b = math_utils.quat_apply_inverse(
-            math_utils.yaw_quat(root_quat), target_pos - self.robot.data.root_pos_w.torch
+        return math_utils.wrap_to_pi(
+            math_utils.euler_xyz_from_quat(target_quat)[2]
+            - math_utils.euler_xyz_from_quat(self.robot.data.root_quat_w.torch)[2]
         )
-        yaw_error = math_utils.wrap_to_pi(
-            math_utils.euler_xyz_from_quat(target_quat)[2] - math_utils.euler_xyz_from_quat(root_quat)[2]
-        )
-        return torch.cat((error_b, yaw_error.sin().unsqueeze(-1), yaw_error.cos().unsqueeze(-1)), dim=-1)
+
+    @property
+    def tile_center_w(self) -> torch.Tensor:
+        """Tile center on the flat ground [m] in the world frame. Shape is (N, 3)."""
+        center = self._env.scene.env_origins.clone()
+        center[:, :2] += self.tile_center
+        center[:, 2] += self.ground_height
+        return center
 
     """
     Properties: waypoint, in the interface of the waypoint task's command.
@@ -166,14 +188,18 @@ class ApproachMotionCommand(GoalMotionCommand):
         # the waypoint is the first reference root pose; spawns lie behind it in its yaw frame, on the ground
         first = self.motion.frame_indices(self.motion_ids[pending], torch.zeros_like(pending))
         origins = self._env.scene.env_origins[pending]
+        ground = origins[:, 2] + self.ground_height
         self.waypoint_pos_w[pending] = self.motion.body_pos_w[first, self.root_index] + origins
+        if self.cfg.waypoint_base_height is not None:
+            # the clips start on the flat ground, so the waypoint height is measured like the waypoint task's
+            self.waypoint_pos_w[pending, 2] = ground + self.cfg.waypoint_base_height
         waypoint_yaw = math_utils.yaw_quat(self.motion.body_quat_w[first, self.root_index])
         self.waypoint_quat_w[pending] = waypoint_yaw
         offset = torch.zeros(count, 3, device=self.device)
         offset[:, 0] = math_utils.sample_uniform(*self.cfg.spawn_x_range, (count,), self.device)
         offset[:, 1] = math_utils.sample_uniform(*self.cfg.spawn_y_range, (count,), self.device)
         spawn = self.waypoint_pos_w[pending] + math_utils.quat_apply(waypoint_yaw, offset)
-        spawn[:, 2] = origins[:, 2]
+        spawn[:, 2] = ground
         self.spawn_pos_w[pending] = spawn
         self.spawn_yaw[pending] = math_utils.sample_uniform(*self.cfg.spawn_yaw_range, (count,), self.device)
 
@@ -241,6 +267,12 @@ class ApproachMotionCommandCfg(GoalMotionCommandCfg):
 
     spawn_yaw_range: tuple[float, float] = (-math.pi, math.pi)
     """Spawn yaw [rad] in the world frame."""
+
+    waypoint_base_height: float | None = 0.75
+    """Waypoint root height [m] above the flat ground, as the waypoint task's ``base_height``.
+
+    None keeps the clip's first root height (0.80 m).
+    """
 
     waypoint_reach_radius: float = 0.3
     """Horizontal distance [m] within which the root counts as at the waypoint."""

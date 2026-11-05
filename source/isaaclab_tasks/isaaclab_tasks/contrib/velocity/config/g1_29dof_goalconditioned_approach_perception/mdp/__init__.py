@@ -8,5 +8,5 @@
 from .approach import APPROACH, CLIMB, PHASE_NAMES, WALK, ApproachMotionCommand, ApproachMotionCommandCfg
 from .curriculums import approach_stats, climbed_task_terrain_levels
 from .events import reset_at_spawn
-from .observations import approach_phase
+from .observations import approach_phase, mirror_heading, root_pos_tile_b, target_heading
 from .terminations import approach_time_out, climb_time_out
