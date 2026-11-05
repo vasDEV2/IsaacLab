@@ -16,12 +16,22 @@ from isaaclab.utils.configclass import configclass
 from isaaclab_assets import UNITREE_G1_29DOF_BOX_FOOT_CFG
 
 from ..mdp.terrains import MotionStairsTerrainCfg
-from .motion_cfg import STAIR_MOTION_FILES
+from .motion_cfg import STAIR_MOTION_FILES, TASK_STAIR_HEIGHT_SCALES, TASK_STAIR_LEVELS
 from .sensors_cfg import DEPTH_CAMERA_CFG, elevation_grid_pattern
 
 # Every tile holds the clips' shared 4.5 m pyramid, centered with a margin for standing starts up to 1.2 m outside
 # it, so reference root poses are valid at every environment origin.
-_MOTION_STAIRS_CFG = MotionStairsTerrainCfg(size=(9.0, 9.0), motion_file=STAIR_MOTION_FILES[0])
+_MOTION_STAIRS_CFG = MotionStairsTerrainCfg(size=(9.0, 9.0), proportion=0.4, motion_file=STAIR_MOTION_FILES[0])
+"""The clips' own staircase on every row, for imitation episodes."""
+
+_TASK_STAIRS_CFG = MotionStairsTerrainCfg(
+    size=(9.0, 9.0),
+    proportion=0.6,
+    motion_file=STAIR_MOTION_FILES[0],
+    height_scale_range=TASK_STAIR_HEIGHT_SCALES,
+    num_levels=TASK_STAIR_LEVELS,
+)
+"""The clips' staircase with its heights scaled by row, for task episodes."""
 
 
 @configclass
@@ -34,14 +44,15 @@ class G1PerceptionSceneCfg(InteractiveSceneCfg):
         terrain_generator=TerrainGeneratorCfg(
             size=(9.0, 9.0),
             border_width=5.0,
-            num_rows=5,
+            num_rows=TASK_STAIR_LEVELS,
             num_cols=10,
             horizontal_scale=0.1,
             vertical_scale=0.005,
             slope_threshold=0.75,
             use_cache=False,
-            curriculum=False,
-            sub_terrains={"motion_stairs": _MOTION_STAIRS_CFG},
+            # rows are task stair levels; the motion command places each episode on its tile
+            curriculum=True,
+            sub_terrains={"motion_stairs": _MOTION_STAIRS_CFG, "task_stairs": _TASK_STAIRS_CFG},
         ),
         max_init_terrain_level=None,
         collision_group=-1,

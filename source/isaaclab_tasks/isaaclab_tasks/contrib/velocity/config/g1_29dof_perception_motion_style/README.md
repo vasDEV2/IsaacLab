@@ -92,9 +92,13 @@ pays nothing until the policy moves like the clip.
 
 | Stage | Environments | Terrain | Trains like |
 | --- | --- | --- | --- |
-| Iterations 0–3000 | Half `flat` | Flat tiles | [`g1_29dof_perception`](../g1_29dof_perception): velocity tracking |
+| Iterations 0–3000 | Half `flat` | Flat tiles | This package without `motion_style`: walk to the tile center |
 | Iterations 0–3000 | Half `stairs` | The reference clips' own pyramid | [`g1_29dof_goalconditioned_perception`](../g1_29dof_goalconditioned_perception): pure imitation |
-| Iteration 3000 on | All `pyramid` | Clip-shaped pyramids, curriculum on rise | This package: landing-center goal with `motion_style` |
+| Iteration 3000 on | All `pyramid` | Clip-shaped pyramids, curriculum on rise | This package: the same goal, now on the landing, with `motion_style` |
+
+Flat and pyramid environments share one waypoint command: start at rest 2.9–3.9 m from the tile center facing it,
+goal 0.75 m above the tile origin. On a flat tile that is the ground at the center; on a pyramid it is the landing
+center, so the switch only moves the goal on top of the pyramid.
 
 `EnvModeCommand` ([`mdp/env_modes.py`](mdp/env_modes.py)) holds each environment's mode. Its reset event runs
 first: before control step 3000 × 24 an environment keeps its initial mode, and from then on it becomes `pyramid`
@@ -102,17 +106,19 @@ at its next reset and moves to a pyramid tile on rows 0–2. One terrain generat
 (5 flat, 5 reference-pyramid, and 10 clip-shaped pyramid columns, 10 rows). `Curriculum/env_modes/*` logs the
 switch, the fraction of environments in each mode, and the mean pyramid level.
 
-Every reward and termination term of the three source tasks is wrapped in `ModeGated` under a `flat_`, `stairs_`,
-or `pyramid_` prefix and is zero outside its mode; resets, pushes, and curricula are gated the same way with
-`ModeGatedEvent`. The perception tracking-std and gait-weight ramps apply to the `flat_` and `pyramid_` terms. Stairs
+Each mode has its own reward and termination terms, wrapped in `ModeGated` under a `flat_`, `stairs_`, or `pyramid_`
+prefix and zero outside their mode: `flat_` rewards are this package's goal and gait terms without `motion_style`,
+`flat_` terminations are the perception task's, and `stairs_` and `pyramid_` terms come from the goal-conditioned task
+and this package. Resets, pushes, and curricula are gated the same way with `ModeGatedEvent`. The gait-weight ramps
+apply to the `flat_` and `pyramid_` terms. Stairs
 environments only imitate (`imitation_probability = 1.0`): every episode starts on a reference frame and tracks
 the clip, so the goal-conditioned task-only rewards stay zero. Imitation episodes end on the clip's last frame;
-the 10 s stairs time-out is a fallback, and the other modes run 20 s.
+the 10 s time-out is a fallback. Flat episodes also end at 10 s; pyramid episodes run 20 s.
 
-The actor's `command` is `[velocity (7), goal (5), velocity mode (1)]`. Flat environments fill the velocity part;
-stairs and pyramid environments fill the goal `(x, y, z, sin, cos)` (destination in the root yaw frame and yaw
-error to the goal heading). Pyramid goals use the approach direction as heading, like the clips' endings, so the
-actor cannot tell stairs and pyramid goals apart and its goal-reaching transfers at the switch. The critic also
+The actor's `command` is the goal `(x, y, z, sin, cos)` in every mode: the destination in the root yaw frame and
+the yaw error to the goal heading. There is no velocity command. Flat and pyramid goals use the approach direction
+as heading, like the clips' endings, so the actor cannot tell the three goals apart and its goal-reaching transfers
+at the switch. The critic also
 sees the one-hot mode and the goal-conditioned reference state (zero outside stairs imitation). Actions, policy
 observations, physics, and startup randomization are this package's (the perception task's).
 

@@ -18,7 +18,6 @@ from .env_modes import (
     mirror_mode_command,
     mode_command,
     mode_time_out,
-    ramp_gated_reward_param,
 )
 from .goal import PyramidGoalCommand, PyramidGoalCommandCfg
 from .motion_style import MotionMatchingStyle

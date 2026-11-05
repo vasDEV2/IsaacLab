@@ -10,7 +10,7 @@ from isaaclab.utils.configclass import configclass
 import isaaclab_tasks.core.velocity.mdp as mdp
 
 from ..mdp import rewards as goal_rewards
-from .motion_cfg import END_EFFECTOR_BODY_NAMES, FOOT_BODY_NAMES
+from .motion_cfg import FOOT_BODY_NAMES, STAIR_MOTION_FILES, STYLE_CLIP_FRAMES
 
 
 @configclass
@@ -42,18 +42,30 @@ class G1RewardsCfg:
         params={"command_name": "motion", "std": 1.0, "body_names": FOOT_BODY_NAMES},
     )
 
-    # -- task episodes: reach the destination with the reference's local limb motion
+    # -- task episodes: reach the destination looking like the nearest reference frame (motion-style task's term)
     task_motion_style = RewTerm(
-        func=goal_rewards.TaskMotionStyle,
+        func=goal_rewards.TaskMotionMatchingStyle,
         weight=2.0,
         params={
             "command_name": "motion",
-            "body_names": END_EFFECTOR_BODY_NAMES,
-            "joint_pos_std": 0.35,
-            "joint_vel_std": 1.5,
-            "body_pos_std": 0.15,
-            "phase_rates": (0.5, 0.75, 1.0, 1.25),
-            "stationary_velocity_threshold": 0.1,
+            "motion_files": STAIR_MOTION_FILES,
+            "frame_limit": STYLE_CLIP_FRAMES,
+            "include_mirrored": True,
+            # combined RMS distance sqrt(mean dq^2 + (0.1 s)^2 mean dqd^2); standing at rest is >= 0.32 away
+            "match_threshold": 0.25,
+            "joint_vel_weight": 0.1,
+            # per-group RMS joint-position error [rad] below which the reward is constant, and the falloff beyond it:
+            # loose legs to adapt to new stairs, a tight upper body
+            "joint_groups": {
+                "legs": {"joint_names": ".*_(hip|knee|ankle)_.*", "inner_threshold": 0.15, "reward_std": 0.15},
+                "upper_body": {
+                    "joint_names": ".*(waist|shoulder|elbow|wrist).*",
+                    "inner_threshold": 0.04,
+                    "reward_std": 0.06,
+                },
+            },
+            "min_joint_speed": 0.1,
+            "asset_cfg": SceneEntityCfg("robot"),
         },
     )
     goal_position = RewTerm(

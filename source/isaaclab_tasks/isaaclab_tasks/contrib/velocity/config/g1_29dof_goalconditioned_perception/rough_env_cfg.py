@@ -51,7 +51,7 @@ class G1RoughGoalConditionedPerceptionEnvCfg(ManagerBasedRLEnvCfg):
         self.scene.contact_forces.update_period = self.sim.dt
         self.sim.visualizer_cfgs = [
             NewtonGLVisualizerCfg(eye=(12.0, 0.0, 6.0), headless=False),
-        #     # NewtonRTXVisualizerCfg(eye=(12.0, 0.0, 6.0), headless=False),
+            #     # NewtonRTXVisualizerCfg(eye=(12.0, 0.0, 6.0), headless=False),
         ]
 
         self.sim.visualizer_cfgs = []
@@ -71,7 +71,7 @@ class G1RoughGoalConditionedPerceptionEnvCfg(ManagerBasedRLEnvCfg):
 
 @configclass
 class G1RoughGoalConditionedPerceptionEnvCfg_PLAY(G1RoughGoalConditionedPerceptionEnvCfg):
-    """Task-only evaluation from the full range of standing starts and destinations."""
+    """Task-only evaluation on every stair height."""
 
     def __post_init__(self):
         super().__post_init__()
@@ -82,9 +82,9 @@ class G1RoughGoalConditionedPerceptionEnvCfg_PLAY(G1RoughGoalConditionedPercepti
         # self.scene.terrain.max_init_terrain_level = None
         self.observations.policy.enable_corruption = False
         self.commands.motion.imitation_probability = 0.0
-        self.commands.motion.task_reset_curriculum = False
+        self.commands.motion.task_terrain_curriculum = False
         self.commands.motion.debug_vis = True
-        self.curriculum.task_resets = None
+        self.curriculum.task_terrain_levels = None
         self.events.reset_joints.params["position_range"] = (0.0, 0.0)
         self.sim.visualizer_cfgs = [
             NewtonGLVisualizerCfg(eye=(0.0, -4.0, 1.0)),

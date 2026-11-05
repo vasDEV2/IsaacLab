@@ -19,19 +19,20 @@ class G1CommandsCfg:
         body_names=TRACKED_BODY_NAMES,
         anchor_body_name="torso_link",
         foot_body_names=FOOT_BODY_NAMES,
-        # imitation only for 5,000 iterations, then down to half the episodes over the next 5,000
-        warmup_steps=120_000,
+        # imitation only for 2,000 iterations (24 steps each), then down to half the episodes over the next 5,000
+        warmup_steps=48_000,
         transition_steps=120_000,
         final_imitation_probability=0.5,
-        # expand toward standing starts only after successful, non-failing task episodes
-        task_reset_curriculum=True,
-        task_start_offset=(-0.9, 0.0, 0.0),
-        initial_position_noise=0.3,
-        initial_yaw_noise=0.3,
+        # imitation on the clips' staircase; task episodes on height-scaled copies, one row up per success
+        imitation_terrain="motion_stairs",
+        task_terrain="task_stairs",
+        task_terrain_curriculum=True,
+        task_max_init_level=0,
+        # task episodes always start standing at rest in front of the stairs
+        task_start_offset=(-0.5, 0.0, 0.0),
+        task_start_position_noise=0.1,
+        task_start_yaw_noise=0.1,
         # move the reference endpoint safely into the 2.5 m square landing
-        task_goal_offset_initial=(0.2, 0.0, 0.0),
         task_goal_offset=(0.75, 0.0, 0.0),
         goal_position_noise=0.35,
-        task_velocity_probability=0.5,
-        task_velocity_range={"x": (-0.15, 0.15), "y": (-0.15, 0.15), "yaw": (-0.2, 0.2)},
     )

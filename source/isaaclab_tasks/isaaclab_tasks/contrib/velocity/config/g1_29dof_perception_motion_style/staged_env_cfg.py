@@ -3,20 +3,20 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Staged G1 perception: flat velocity tracking and reference stair climbing, then motion-style pyramid goals.
+"""Staged G1 perception: flat waypoints and reference stair climbing, then motion-style pyramid goals.
 
-Until the switch (3000 iterations), half of the environments train like ``g1_29dof_perception`` (velocity
-tracking on flat tiles) and half purely imitate the reference clips on their own pyramid, with the
-``g1_29dof_goalconditioned_perception`` imitation rewards and terminations. From the switch on, every environment
-moves at its next reset to a clip-shaped pyramid and trains like this package's motion-style task: reach the
-landing center with the motion-matching style reward.
+Until the switch (3000 iterations), half of the environments walk to a waypoint at the center of a flat tile with
+this package's goal and gait rewards (without the style reward), and half purely imitate the reference clips on
+their own pyramid, with the ``g1_29dof_goalconditioned_perception`` imitation rewards and terminations. Both run
+10 s episodes. From the switch on, every environment moves at its next reset to a clip-shaped pyramid, where the
+same waypoint command puts the goal on the landing, and trains like this package's motion-style task with the
+motion-matching style reward.
 
 Each source task's reward and termination terms are wrapped in :class:`~.mdp.ModeGated` under a ``flat_``,
 ``stairs_``, or ``pyramid_`` prefix, so they act only on environments of their mode.
 """
 
 import copy
-import math
 
 from isaaclab_visualizers.newton import NewtonGLVisualizerCfg
 
@@ -100,7 +100,7 @@ _TERRAIN_GENERATOR = TerrainGeneratorCfg(
     use_cache=False,
     curriculum=True,
     sub_terrains={
-        # flat velocity tracking (perception task)
+        # flat waypoints: the goal is the tile center on the ground
         "flat": MeshPlaneTerrainCfg(proportion=0.25),
         # the reference clips' own pyramid, with the clip origin at the tile origin (goal-conditioned task)
         "motion_stairs": MotionStairsTerrainCfg(proportion=0.25, motion_file=STAIR_MOTION_FILES[0]),
@@ -129,11 +129,10 @@ class G1StagedCommandsCfg:
     """The mode schedule and every mode's commands; each command runs for all environments, gated where used."""
 
     env_mode = style_mdp.EnvModeCommandCfg(switch_step=SWITCH_ITERATION * STEPS_PER_ITERATION)
-    # flat: the perception velocity command
-    base_velocity = flat_cfg.G1CommandsCfg().base_velocity.replace(debug_vis=False)
     # stairs: pure imitation of the reference clips for the whole stage (no goal-conditioned task episodes)
-    motion = stairs_cfg.G1CommandsCfg().motion.replace(imitation_probability=1.0, debug_vis=False)
-    # pyramid: the landing-center goal and its gait intent
+    motion = stairs_cfg.G1CommandsCfg().motion.replace(imitation_probability=1.0, debug_vis=False, task_terrain=None)
+    # flat and pyramid: the tile-center goal (on the ground for flat tiles, on the landing for pyramids)
+    # and its gait intent
     waypoint = pyramid_cfg.G1CommandsCfg().waypoint.replace(debug_vis=False)
     waypoint_gait = pyramid_cfg.G1CommandsCfg().waypoint_gait
 
@@ -145,7 +144,7 @@ Observations.
 
 @configclass
 class StagedCommandObsCfg(ObsGroup):
-    """``[velocity (7), goal (5), velocity mode (1)]``; stairs and pyramid goals share one encoding."""
+    """Goal ``(x, y, z, sin, cos)``; stairs, flat, and pyramid goals share one encoding."""
 
     command = MirrorObsTerm(func=style_mdp.mode_command, mirror=style_mdp.mirror_mode_command)
 
@@ -208,9 +207,11 @@ Rewards and terminations: each source task's terms, gated by mode.
 
 G1StagedRewardsCfg = _make_cfg(
     "G1StagedRewardsCfg",
-    "Perception rewards on flat tiles, goal-conditioned rewards on the reference pyramid, motion-style on pyramids.",
+    "Waypoint and gait rewards on flat tiles, goal-conditioned rewards on the reference pyramid, motion-style on "
+    "pyramids; each mode has its own copy of the terms.",
     {
-        **_gated_terms(flat_cfg.G1RewardsCfg(), "flat", (FLAT,), RewTerm),
+        # the motion-style task's goal and gait terms, without the style reward
+        **_gated_terms(pyramid_cfg.G1RewardsCfg(), "flat", (FLAT,), RewTerm, skip=("motion_style",)),
         **_gated_terms(stairs_cfg.G1RewardsCfg(), "stairs", (STAIRS,), RewTerm),
         **_gated_terms(pyramid_cfg.G1RewardsCfg(), "pyramid", (PYRAMID,), RewTerm),
     },
@@ -223,10 +224,10 @@ G1StagedTerminationsCfg = _make_cfg(
     {
         "time_out": DoneTerm(func=mdp.time_out, time_out=True),
         "terrain_out_of_bounds": DoneTerm(func=mdp.terrain_out_of_bounds),
-        # goal-conditioned task episodes last 10 s; the environment episode is 20 s for the other modes
-        "stairs_time_out": DoneTerm(
+        # flat waypoint and reference climbing episodes last 10 s; pyramid episodes run the full 20 s
+        "flat_stairs_time_out": DoneTerm(
             func=ModeGated,
-            params=_gated(style_mdp.mode_time_out, {"max_episode_length_s": 10.0}, (STAIRS,)),
+            params=_gated(style_mdp.mode_time_out, {"max_episode_length_s": 10.0}, (FLAT, STAIRS)),
             time_out=True,
         ),
         **_gated_terms(flat_cfg.G1TerminationsCfg(), "flat", (FLAT,), DoneTerm, skip=_SHARED_TERMINATIONS),
@@ -262,11 +263,6 @@ class G1StagedEventCfg(pyramid_cfg.G1EventCfg):
             mdp.push_by_setting_velocity, {"velocity_range": {"x": (-1.0, 1.0), "y": (-1.0, 1.0)}}, (FLAT, PYRAMID)
         ),
     )
-    flat_reset_root = EventTerm(
-        func=ModeGatedEvent,
-        mode="reset",
-        params=_gated(mdp.reset_root_state_uniform, flat_cfg.G1EventCfg().reset_base.params, (FLAT,)),
-    )
     stairs_reset_joints = EventTerm(
         func=ModeGatedEvent,
         mode="reset",
@@ -275,24 +271,11 @@ class G1StagedEventCfg(pyramid_cfg.G1EventCfg):
     stairs_reset_root = EventTerm(
         func=ModeGatedEvent, mode="reset", params=_gated(reset_goal_root_state, {"command_name": "motion"}, (STAIRS,))
     )
-    pyramid_reset_root = EventTerm(
+    # flat and pyramid: start at rest on the ring 2.9-3.9 m from the tile center, facing the waypoint
+    waypoint_reset_root = EventTerm(
         func=ModeGatedEvent,
         mode="reset",
-        params=_gated(waypoint_mdp.reset_root_at_waypoint_start, {"command_name": "waypoint"}, (PYRAMID,)),
-    )
-
-
-def _ramp_std(term_name: str) -> CurrTerm:
-    return CurrTerm(
-        func=style_mdp.ramp_gated_reward_param,
-        params={
-            "term_name": term_name,
-            "param_name": "std",
-            "val_0": math.sqrt(1.0),
-            "val_1": math.sqrt(0.1),
-            "step_0": 0,
-            "step_1": 15000 * STEPS_PER_ITERATION,
-        },
+        params=_gated(waypoint_mdp.reset_root_at_waypoint_start, {"command_name": "waypoint"}, (FLAT, PYRAMID)),
     )
 
 
@@ -311,7 +294,7 @@ def _ramp_weight(term_name: str, weight_0: float, weight_1: float) -> CurrTerm:
 
 @configclass
 class G1StagedCurriculumCfg:
-    """Mode logging, each mode's curriculum, and the perception tasks' reward ramps on their prefixed terms."""
+    """Mode logging, the pyramid curriculum, and the gait weight ramps on each mode's prefixed terms."""
 
     env_modes = CurrTerm(func=style_mdp.env_mode_stats)
     # pyramid: promote after reaching the landing, demote after ending over half the start distance away
@@ -319,10 +302,7 @@ class G1StagedCurriculumCfg:
         func=ModeGatedEvent,
         params=_gated(waypoint_mdp.terrain_levels_waypoint, {"command_name": "waypoint"}, (PYRAMID,)),
     )
-    # flat: the perception tracking std and gait weight ramps
-    flat_track_lin_vel = _ramp_std("flat_track_lin_vel_xy")
-    flat_track_ang_vel = _ramp_std("flat_track_ang_vel_z")
-    flat_track_heading = _ramp_std("flat_track_heading")
+    # flat: the motion-style task's gait weight ramps, on the flat copies of the terms
     flat_feet_air_time_weight = _ramp_weight("flat_feet_air_time", 2.0, 5.0)
     flat_foot_clearance_weight = _ramp_weight("flat_foot_clearance", 5.0, 10.0)
     # pyramid: the motion-style task's gait weight ramps
@@ -337,7 +317,7 @@ Environments.
 
 @configclass
 class G1StagedPerceptionEnvCfg(G1RoughPerceptionEnvCfg):
-    """Flat velocity tracking and reference stair climbing until 3000 iterations, then motion-style pyramid goals."""
+    """Flat waypoints and reference stair climbing until 3000 iterations, then motion-style pyramid goals."""
 
     scene: G1StagedSceneCfg = G1StagedSceneCfg(num_envs=128, env_spacing=2.5)
     observations: G1StagedObservationsCfg = G1StagedObservationsCfg()

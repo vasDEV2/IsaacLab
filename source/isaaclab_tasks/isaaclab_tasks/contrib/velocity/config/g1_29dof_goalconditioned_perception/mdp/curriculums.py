@@ -3,7 +3,7 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Per-environment task start difficulty driven by goal-reaching success."""
+"""Per-environment task stair height driven by goal-reaching success."""
 
 from __future__ import annotations
 
@@ -17,21 +17,16 @@ if TYPE_CHECKING:
     from .motion import GoalMotionCommand
 
 
-def task_reset_difficulty(
-    env: ManagerBasedRLEnv,
-    env_ids: torch.Tensor,
-    command_name: str,
-    success_step: float = 0.02,
-    failure_step: float = 0.05,
-) -> torch.Tensor:
-    """Raise an environment's difficulty after it reaches the goal and survives a task episode.
+def task_terrain_levels(env: ManagerBasedRLEnv, env_ids: torch.Tensor, command_name: str) -> torch.Tensor:
+    """Move an environment's task tile one row up (taller stairs) after it reaches the goal and survives.
 
-    Any other finished task episode lowers it. Imitation episodes and the first reset leave it unchanged.
-    The difficulty is not saved with checkpoints, so a resumed run restarts from zero.
+    Any other finished task episode moves it one row down. Imitation episodes and the first reset leave it
+    unchanged. The level applies at the environment's next task episode. It is not saved with checkpoints, so a
+    resumed run restarts from the initial rows.
     """
     command: GoalMotionCommand = env.command_manager.get_term(command_name)
     completed = (env.episode_length_buf[env_ids] > 0) & ~command.is_imitation[env_ids]
     success = command.goal_reached[env_ids] & ~env.termination_manager.terminated[env_ids]
-    change = torch.where(success, success_step, -failure_step) * completed
-    command.task_reset_difficulty[env_ids] = (command.task_reset_difficulty[env_ids] + change).clamp(0.0, 1.0)
-    return command.task_reset_difficulty.mean()
+    change = torch.where(success, 1, -1) * completed
+    command.task_level[env_ids] = (command.task_level[env_ids] + change).clamp(0, command.num_levels - 1)
+    return command.task_level.float().mean()

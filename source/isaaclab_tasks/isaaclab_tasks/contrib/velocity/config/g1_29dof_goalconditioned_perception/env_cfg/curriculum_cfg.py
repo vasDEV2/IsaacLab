@@ -6,12 +6,12 @@
 from isaaclab.managers import CurriculumTermCfg as CurrTerm
 from isaaclab.utils.configclass import configclass
 
-from ..mdp.curriculums import task_reset_difficulty
+from ..mdp.curriculums import task_terrain_levels
 
 
 @configclass
 class G1CurriculumCfg:
     """Curriculum terms for the MDP."""
 
-    # Every tile holds the same pyramid, so there is no terrain curriculum.
-    task_resets = CurrTerm(func=task_reset_difficulty, params={"command_name": "motion"})
+    # Task episodes climb taller stairs after each success; imitation tiles keep the clips' pyramid.
+    task_terrain_levels = CurrTerm(func=task_terrain_levels, params={"command_name": "motion"})

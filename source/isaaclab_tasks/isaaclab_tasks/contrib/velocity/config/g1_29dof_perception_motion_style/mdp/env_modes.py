@@ -3,10 +3,10 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Per-environment training modes for the staged task: flat velocity tracking, reference stair climbing, pyramid goals.
+"""Per-environment training modes for the staged task: flat waypoints, reference stair climbing, pyramid goals.
 
 Before :attr:`EnvModeCommandCfg.switch_step`, each environment keeps the mode it was given at construction:
-:data:`FLAT` (perception velocity tracking on flat tiles) or :data:`STAIRS` (the goal-conditioned imitation and
+:data:`FLAT` (reach a waypoint at the center of a flat tile) or :data:`STAIRS` (the goal-conditioned imitation and
 task episodes on the reference clips' pyramid). From the switch on, every environment becomes :data:`PYRAMID`
 (reach the landing center of a clip-shaped pyramid with the motion-style rewards) at its next reset.
 
@@ -29,7 +29,6 @@ from isaaclab.utils.configclass import configclass
 from isaaclab.utils.string import string_to_callable
 
 from isaaclab_tasks.contrib.velocity.config.g1_29dof_goalconditioned_perception.mdp.symmetry import mirror_goal
-from isaaclab_tasks.contrib.velocity.config.g1_29dof_rigid.mdp.symmetry import mirror_velocity_heading
 
 if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedRLEnv
@@ -233,51 +232,28 @@ def mode_time_out(env: ManagerBasedRLEnv, max_episode_length_s: float) -> torch.
 def mode_command(
     env: ManagerBasedRLEnv,
     mode_command_name: str = "env_mode",
-    velocity_command_name: str = "base_velocity",
     motion_command_name: str = "motion",
     waypoint_command_name: str = "waypoint",
 ) -> torch.Tensor:
-    """Actor command shared by all modes: ``[velocity (7), goal (5), velocity mode (1)]``.
+    """Actor goal shared by all modes: ``(x, y, z, sin, cos)``. Shape is (num_envs, 5).
 
-    Flat environments fill the velocity command and set the flag; stairs and pyramid environments fill the goal
-    ``(x, y, z, sin, cos)``: the destination in the root yaw frame [m] and the yaw error to the goal heading. Stairs
-    use the motion command's destination; pyramids use the landing center with the approach heading, as the
-    reference clips end facing the direction they climbed. The actor does not see the stairs/pyramid distinction.
+    The destination in the root yaw frame [m] and the yaw error to the goal heading. Stairs use the motion command's
+    destination; flat and pyramid environments use the waypoint (the tile center, on the ground for flat tiles and
+    on the landing for pyramids) with the approach heading, as the reference clips end facing the direction they
+    climbed. The actor does not see which mode it is in.
     """
-    modes = env.command_manager.get_term(mode_command_name)
-    flat = modes.mask((FLAT,)).unsqueeze(-1)
-    stairs = modes.mask((STAIRS,)).unsqueeze(-1)
-    velocity = env.command_manager.get_command(velocity_command_name)
+    stairs = env.command_manager.get_term(mode_command_name).mask((STAIRS,)).unsqueeze(-1)
     motion_goal = env.command_manager.get_command(motion_command_name)
     waypoint = env.command_manager.get_term(waypoint_command_name)
     root_yaw = math_utils.euler_xyz_from_quat(waypoint.robot.data.root_quat_w.torch)[2]
     yaw_error = math_utils.wrap_to_pi(waypoint.goal_yaw - root_yaw).unsqueeze(-1)
-    pyramid_goal = torch.cat((waypoint.command, yaw_error.sin(), yaw_error.cos()), dim=-1)
-    goal = torch.where(stairs, motion_goal, pyramid_goal)
-    return torch.cat((velocity * flat, goal * ~flat, flat.float()), dim=-1)
+    waypoint_goal = torch.cat((waypoint.command, yaw_error.sin(), yaw_error.cos()), dim=-1)
+    return torch.where(stairs, motion_goal, waypoint_goal)
 
 
 def mirror_mode_command(data: torch.Tensor) -> torch.Tensor:
     """Reflect :func:`mode_command` across the root XZ plane."""
-    return torch.cat((mirror_velocity_heading(data[..., :7]), mirror_goal(data[..., 7:12]), data[..., 12:]), dim=-1)
-
-
-def ramp_gated_reward_param(
-    env: ManagerBasedRLEnv,
-    env_ids: Sequence[int],
-    term_name: str,
-    param_name: str,
-    val_0: float,
-    val_1: float,
-    step_0: int,
-    step_1: int,
-) -> float:
-    """Linearly ramp a parameter of a :class:`ModeGated` reward term's wrapped function from ``val_0`` to ``val_1``."""
-    alpha = float(np.clip((env.common_step_counter - step_0) / max(step_1 - step_0, 1), 0.0, 1.0))
-    term_cfg = env.reward_manager.get_term_cfg(term_name)
-    term_cfg.params["func_params"][param_name] = (1.0 - alpha) * val_0 + alpha * val_1
-    env.reward_manager.set_term_cfg(term_name, term_cfg)
-    return term_cfg.params["func_params"][param_name]
+    return mirror_goal(data)
 
 
 def env_mode_stats(env: ManagerBasedRLEnv, env_ids: Sequence[int], command_name: str = "env_mode") -> dict:

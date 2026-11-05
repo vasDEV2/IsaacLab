@@ -23,6 +23,8 @@ from isaaclab.markers.config import FRAME_MARKER_CFG
 from isaaclab.utils import math as math_utils
 from isaaclab.utils.configclass import configclass
 
+from .terrains import motion_stairs_height_scale
+
 if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedRLEnv
 
@@ -99,6 +101,8 @@ class StairMotionLibrary:
         self.body_ang_vel_w = pack("body_ang_vel")
         """Body angular velocities [rad/s] in the clip frame. Shape is (frames, bodies, 3)."""
         self.lengths = torch.tensor(lengths, dtype=torch.long, device=device)
+        self.terrain_top = float((terrain[:, 2] + terrain[:, 5] / 2.0).max())
+        """Top of the clips' terrain boxes [m] in the clip frame, i.e. the landing height."""
         self.starts = self.lengths.cumsum(0) - self.lengths
 
     def frame_indices(self, motion_ids: torch.Tensor, time_steps: torch.Tensor) -> torch.Tensor:
@@ -111,9 +115,13 @@ class GoalMotionCommand(CommandTerm):
 
     Each reset samples an imitation or a task episode and one of the clips. Imitation episodes start
     on a random reference frame and their destination is the clip's final root pose. Task episodes start
-    on the first frame, blended toward a standing start further back by :attr:`task_reset_difficulty`,
-    and their destination is shifted into the top landing with noise. The actor observes only
-    :attr:`command`; the episode type and reference are privileged.
+    standing near the first reference root and their destination is shifted into the top landing with noise.
+    The actor observes only :attr:`command`; the episode type and reference are privileged.
+
+    With :attr:`GoalMotionCommandCfg.task_terrain` set, each reset also moves the environment to a terrain
+    tile: imitation episodes to the clips' own staircase, task episodes to a copy whose rises are scaled by
+    the row :attr:`task_level`, which :func:`~.curriculums.task_terrain_levels` raises after successes.
+    Task destinations are lowered with the scaled landing.
 
     The episode draw happens in :meth:`resample_time_steps`, which the reset events call before the
     command manager resets, and runs at most once per reset.
@@ -146,8 +154,7 @@ class GoalMotionCommand(CommandTerm):
         self.goal_quat_w = torch.zeros(self.num_envs, 4, device=self.device)
         self.goal_quat_w[:, 3] = 1.0
         self.goal_reached = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
-        self.task_reset_difficulty = torch.zeros(self.num_envs, device=self.device)
-        """Per-environment task start/goal randomization in [0, 1]; see :func:`task_reset_difficulty`."""
+        self._setup_terrain(env)
         self._finished_task = torch.zeros_like(self.is_imitation)
         self._finished_success = torch.zeros_like(self.is_imitation)
         self._resample_pending = torch.ones_like(self.is_imitation)
@@ -221,11 +228,9 @@ class GoalMotionCommand(CommandTerm):
         elapsed = (self._env.common_step_counter - self.cfg.warmup_steps) / self.cfg.transition_steps
         return 1.0 - min(max(elapsed, 0.0), 1.0) * (1.0 - self.cfg.final_imitation_probability)
 
-    def reset_difficulty(self, env_ids: torch.Tensor) -> torch.Tensor:
-        """Task start/goal randomization scale in [0, 1]; full scale without the success curriculum."""
-        if self.cfg.task_reset_curriculum:
-            return self.task_reset_difficulty[env_ids]
-        return torch.ones(len(env_ids), device=self.device)
+    def task_height_scale(self, env_ids: torch.Tensor) -> torch.Tensor:
+        """Stair height scale of the task tile at each environment's :attr:`task_level`. Shape is (len(env_ids),)."""
+        return self.level_height_scales[self.task_level[env_ids]]
 
     """
     Properties: reference at the current frame, in the world frame.
@@ -361,6 +366,7 @@ class GoalMotionCommand(CommandTerm):
 
         self.is_imitation[pending] = torch.rand(count, device=self.device) < self.sampling_probability
         self.motion_ids[pending] = torch.randint(self.num_motions, (count,), device=self.device)
+        self._place_on_terrain(pending)
         # imitation starts on a random frame (or the first, for full clips); task episodes start on the first
         frames = (torch.rand(count, device=self.device) * self.motion_lengths[pending]).long()
         full_clip = torch.rand(count, device=self.device) < self.cfg.full_clip_probability
@@ -371,15 +377,15 @@ class GoalMotionCommand(CommandTerm):
         self.goal_pos_w[pending] = self.motion.body_pos_w[last, self.root_index] + self._env.scene.env_origins[pending]
         self.goal_quat_w[pending] = math_utils.yaw_quat(self.motion.body_quat_w[last, self.root_index])
         task = (~self.is_imitation[pending]).float().unsqueeze(-1)
-        difficulty = self.reset_difficulty(pending).unsqueeze(-1)
-        initial_offset = torch.tensor(self.cfg.task_goal_offset_initial, device=self.device)
-        final_offset = torch.tensor(self.cfg.task_goal_offset, device=self.device)
-        offset = torch.lerp(initial_offset.expand(count, -1), final_offset.expand(count, -1), difficulty)
+        offset = torch.tensor(self.cfg.task_goal_offset, device=self.device).expand(count, -1)
         self.goal_pos_w[pending] += math_utils.quat_apply(self.goal_quat_w[pending], offset) * task
         noise = math_utils.sample_uniform(
             -self.cfg.goal_position_noise, self.cfg.goal_position_noise, (count, 2), self.device
         )
-        self.goal_pos_w[pending, :2] += noise * difficulty * task
+        self.goal_pos_w[pending, :2] += noise * task
+        # the task tile's landing sits lower or higher by the scaled box heights
+        landing_shift = (self.task_height_scale(pending) - 1.0) * self.motion.terrain_top
+        self.goal_pos_w[pending, 2] += landing_shift * task.squeeze(-1)
         self._resample_pending[pending] = False
 
     def reset(self, env_ids: Sequence[int] | None = None) -> dict[str, float]:
@@ -394,6 +400,66 @@ class GoalMotionCommand(CommandTerm):
     """
     Implementation specific functions.
     """
+
+    def _setup_terrain(self, env: ManagerBasedRLEnv):
+        """Find the imitation and task tile columns and the task rows' stair height scales."""
+        self.task_level = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
+        """Per-environment task tile row; see :func:`~.curriculums.task_terrain_levels`."""
+        self.level_height_scales = torch.ones(1, device=self.device)
+        """Stair height scale of each task tile row. Shape is (num_levels,)."""
+        self.num_levels = 1
+        if self.cfg.task_terrain is None:
+            return
+        terrain = env.scene.terrain
+        generator = terrain.cfg.terrain_generator
+        if generator is None or not generator.curriculum or terrain.terrain_origins is None:
+            raise ValueError("GoalMotionCommand with task_terrain needs a curriculum terrain generator.")
+        if tuple(generator.difficulty_range) != (0.0, 1.0):
+            raise ValueError("GoalMotionCommand with task_terrain needs difficulty_range (0, 1).")
+        task_cfg = generator.sub_terrains[self.cfg.task_terrain]
+        if task_cfg.num_levels != generator.num_rows:
+            raise ValueError(f"Sub-terrain '{self.cfg.task_terrain}' needs num_levels == num_rows.")
+        # the generator assigns sub-terrains to columns by proportion (TerrainGenerator._generate_curriculum_terrains)
+        names = list(generator.sub_terrains)
+        proportions = np.array([generator.sub_terrains[name].proportion for name in names], dtype=float)
+        cumulative = np.cumsum(proportions / proportions.sum())
+        column_names = [
+            names[np.min(np.where(col / generator.num_cols + 0.001 < cumulative)[0])]
+            for col in range(generator.num_cols)
+        ]
+        self.terrain_columns: dict[bool, torch.Tensor] = {}
+        """Tile columns of imitation (True) and task (False) episodes."""
+        for is_imitation, name in ((True, self.cfg.imitation_terrain), (False, self.cfg.task_terrain)):
+            cols = [col for col, column_name in enumerate(column_names) if column_name == name]
+            if not cols:
+                raise ValueError(f"No terrain column holds sub-terrain '{name}'.")
+            self.terrain_columns[is_imitation] = torch.tensor(cols, dtype=torch.long, device=self.device)
+        self.num_levels = generator.num_rows
+        self.level_height_scales = torch.tensor(
+            [motion_stairs_height_scale(task_cfg, level) for level in range(self.num_levels)], device=self.device
+        )
+        max_init_level = min(self.cfg.task_max_init_level, self.num_levels - 1)
+        self.task_level[:] = torch.randint(max_init_level + 1, (self.num_envs,), device=self.device)
+
+    def _place_on_terrain(self, env_ids: torch.Tensor):
+        """Move imitation episodes to a clip-staircase tile and task episodes to a tile of their :attr:`task_level`."""
+        if self.cfg.task_terrain is None:
+            return
+        if not self.cfg.task_terrain_curriculum:
+            self.task_level[env_ids] = torch.randint(self.num_levels, (len(env_ids),), device=self.device)
+        terrain = self._env.scene.terrain
+        for is_imitation, cols in self.terrain_columns.items():
+            ids = env_ids[self.is_imitation[env_ids] == is_imitation]
+            if len(ids) == 0:
+                continue
+            terrain.terrain_types[ids] = cols[torch.randint(len(cols), (len(ids),), device=self.device)]
+            # every imitation row holds the same staircase
+            terrain.terrain_levels[ids] = (
+                torch.randint(self.num_levels, (len(ids),), device=self.device)
+                if is_imitation
+                else self.task_level[ids]
+            )
+            terrain.env_origins[ids] = terrain.terrain_origins[terrain.terrain_levels[ids], terrain.terrain_types[ids]]
 
     def _as_env_ids(self, env_ids: Sequence[int] | torch.Tensor | slice) -> torch.Tensor:
         if isinstance(env_ids, slice):
@@ -492,32 +558,35 @@ class GoalMotionCommandCfg(CommandTermCfg):
     full_clip_probability: float = 0.2
     """Fraction of imitation episodes that start on the first frame instead of a random one."""
 
-    task_reset_curriculum: bool = True
-    """Scale task start/goal randomization by the per-environment success difficulty; otherwise use full scale."""
+    imitation_terrain: str = "motion_stairs"
+    """Sub-terrain holding the clips' own staircase, used by imitation episodes when :attr:`task_terrain` is set."""
 
-    task_start_offset: tuple[float, float, float] = (-0.9, 0.0, 0.0)
-    """Standing-start offset [m] from the first reference root, in its yaw frame, at full difficulty."""
+    task_terrain: str | None = None
+    """Sub-terrain with height-scaled staircases (one scale per row) for task episodes.
 
-    initial_position_noise: float = 0.3
-    """Uniform task start XY noise [m] in the first reference root's yaw frame, at full difficulty."""
+    None leaves terrain placement to the caller and keeps the clips' heights for task destinations.
+    """
 
-    initial_yaw_noise: float = 0.3
-    """Uniform task start yaw noise [rad] at full difficulty."""
+    task_terrain_curriculum: bool = True
+    """Place task episodes on their success-driven :attr:`GoalMotionCommand.task_level`; otherwise on a random row."""
 
-    task_goal_offset_initial: tuple[float, float, float] = (0.2, 0.0, 0.0)
-    """Task destination offset [m] from the final reference root, in its yaw frame, at zero difficulty."""
+    task_max_init_level: int = 0
+    """Highest task tile row an environment starts on."""
+
+    task_start_offset: tuple[float, float, float] = (-0.5, 0.0, 0.0)
+    """Standing-start offset [m] from the first reference root, in its yaw frame."""
+
+    task_start_position_noise: float = 0.1
+    """Uniform task start XY noise [m] in the first reference root's yaw frame."""
+
+    task_start_yaw_noise: float = 0.1
+    """Uniform task start yaw noise [rad]."""
 
     task_goal_offset: tuple[float, float, float] = (0.75, 0.0, 0.0)
-    """Task destination offset [m] from the final reference root, in its yaw frame, at full difficulty."""
+    """Task destination offset [m] from the final reference root, in its yaw frame."""
 
     goal_position_noise: float = 0.35
-    """Uniform task destination XY noise [m] in world axes, at full difficulty."""
-
-    task_velocity_probability: float = 0.5
-    """Fraction of task resets that receive root velocity noise above difficulty 0.8."""
-
-    task_velocity_range: dict[str, tuple[float, float]] = {"x": (-0.15, 0.15), "y": (-0.15, 0.15), "yaw": (-0.2, 0.2)}
-    """Root velocity noise [m/s, rad/s] in the start yaw frame, keyed by x, y, z, roll, pitch, yaw."""
+    """Uniform task destination XY noise [m] in world axes."""
 
     position_tolerance: float = 0.35
     """Destination XY tolerance [m]."""

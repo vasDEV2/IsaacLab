@@ -50,3 +50,12 @@ TRACKED_BODY_NAMES = [
 
 FOOT_BODY_NAMES = ["left_ankle_roll_link", "right_ankle_roll_link"]
 END_EFFECTOR_BODY_NAMES = [*FOOT_BODY_NAMES, "left_wrist_yaw_link", "right_wrist_yaw_link"]
+
+STYLE_CLIP_FRAMES = 174
+"""Captured climb frames per clip. Later frames settle into the standing pose, which a robot at rest would match."""
+
+TASK_STAIR_LEVELS = 11
+"""Task terrain rows, each with one stair height scale interpolated from ``TASK_STAIR_HEIGHT_SCALES``."""
+
+TASK_STAIR_HEIGHT_SCALES = (0.2, 1.2)
+"""Stair height scale of the first and last task row; row 8 is the clips' own staircase (scale 1.0)."""

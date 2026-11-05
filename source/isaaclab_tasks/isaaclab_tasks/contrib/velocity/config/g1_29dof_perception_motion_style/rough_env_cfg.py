@@ -53,12 +53,12 @@ class G1RoughPerceptionEnvCfg(ManagerBasedRLEnvCfg):
         self.sim.physics_material = self.scene.terrain.physics_material
         self.scene.height_scanner.update_period = self.decimation * self.sim.dt
         self.scene.contact_forces.update_period = self.sim.dt
-        # self.sim.visualizer_cfgs = [
-        #     NewtonGLVisualizerCfg(eye=(12.0, 0.0, 6.0), headless=False),
-        #     # #     # NewtonRTXVisualizerCfg(eye=(12.0, 0.0, 6.0), headless=False),
-        # ]
+        self.sim.visualizer_cfgs = [
+            NewtonGLVisualizerCfg(eye=(12.0, 0.0, 6.0), headless=False),
+            # #     # NewtonRTXVisualizerCfg(eye=(12.0, 0.0, 6.0), headless=False),
+        ]
 
-        self.sim.visualizer_cfgs = []
+        # self.sim.visualizer_cfgs = []
         # self.video_recorders = []
 
         self.video_recorders = [

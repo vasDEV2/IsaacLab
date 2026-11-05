@@ -93,18 +93,34 @@ class StairsCurriculumTerrainCfg(SubTerrainBaseCfg):
     platform_width: float = 1.2
 
 
+def motion_stairs_height_scale(cfg: MotionStairsTerrainCfg, level: int) -> float:
+    """Height scale of the clip's terrain boxes on curriculum ``level`` (row); 1 without ``height_scale_range``."""
+    if cfg.height_scale_range is None:
+        return 1.0
+    low, high = cfg.height_scale_range
+    return low + (high - low) * level / max(cfg.num_levels - 1, 1)
+
+
 def motion_stairs_terrain(difficulty: float, cfg: MotionStairsTerrainCfg) -> tuple[list[trimesh.Trimesh], np.ndarray]:
     """Ground plane plus the terrain boxes stored with the motion clip, in the clip's own frame.
 
     The returned origin is the clip frame's origin (on the ground), so reference root poses map to the
     world by adding the environment origin only. Without ``clip_offset``, the boxes' XY bounds are centered
-    in the tile. ``difficulty`` is ignored: the clip fixes the geometry.
+    in the tile. Without ``height_scale_range``, ``difficulty`` is ignored and the clip fixes the geometry.
+    Otherwise the row ``floor(difficulty * num_levels)`` scales every box height (and so every rise) by
+    :func:`motion_stairs_height_scale`, keeping the footprint, so clip start poses still fit the tile.
+    This requires ``TerrainGeneratorCfg.num_rows == num_levels``.
     """
     with np.load(cfg.motion_file, allow_pickle=False) as data:
-        positions = data["terrain_position"]
-        dimensions = data["terrain_dimension"]
+        positions = np.array(data["terrain_position"], dtype=float)
+        dimensions = np.array(data["terrain_dimension"], dtype=float)
         quats = data.get("terrain_quat")
         ground = float(data["ground_height"]) if "ground_height" in data else 0.0
+    level = min(int(difficulty * cfg.num_levels + 1e-6), cfg.num_levels - 1)
+    scale = motion_stairs_height_scale(cfg, level)
+    # boxes rest on the ground; scale their heights about it
+    positions[:, 2] = ground + (positions[:, 2] - ground) * scale
+    dimensions[:, 2] *= scale
     if cfg.clip_offset is None:
         lower = (positions[:, :2] - dimensions[:, :2] / 2.0).min(axis=0)
         upper = (positions[:, :2] + dimensions[:, :2] / 2.0).max(axis=0)
@@ -133,3 +149,9 @@ class MotionStairsTerrainCfg(SubTerrainBaseCfg):
 
     clip_offset: tuple[float, float] | None = None
     """XY placement [m] of the clip frame origin relative to the sub-terrain center; None centers the boxes."""
+
+    height_scale_range: tuple[float, float] | None = None
+    """Box height scale on the first and last curriculum row; None keeps the clip's heights on every row."""
+
+    num_levels: int = 1
+    """Curriculum rows of the generator, used to decode the row from ``difficulty``."""
