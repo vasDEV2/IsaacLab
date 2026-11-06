@@ -52,14 +52,14 @@ from .mdp import APPROACH, IMITATE, WALK
 STEPS_PER_ITERATION = 24
 """Must match the runner's ``num_steps_per_env``; the schedule is counted in control steps."""
 
-IMITATION_ITERATION = 2
+IMITATION_ITERATION = 3000
 """Iteration from which new episodes approach without waypoint rewards and then imitate."""
 
 TERMINATION_DECAY_ITERATION = 2000
 """Iterations after :data:`IMITATION_ITERATION` over which the reference termination thresholds tighten to their
 final values."""
 
-BASE_REACHED_BONUS = 100.0
+BASE_REACHED_BONUS = 0.0
 """Return paid once per approach episode on first reaching the base waypoint (not in walk)."""
 
 
