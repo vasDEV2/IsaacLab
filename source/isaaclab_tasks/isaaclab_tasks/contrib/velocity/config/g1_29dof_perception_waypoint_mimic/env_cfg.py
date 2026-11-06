@@ -19,10 +19,8 @@ from isaaclab_visualizers.newton import NewtonGLVisualizerCfg
 from isaaclab.managers import RewardTermCfg as RewTerm
 from isaaclab.managers import TerminationTermCfg as DoneTerm
 from isaaclab.utils.configclass import configclass
-from isaaclab.utils.noise import UniformNoiseCfg as Unoise
 
 from isaaclab_contrib.mdp import MirrorObservationTermCfg as MirrorObsTerm
-from isaaclab_contrib.mdp import mirror_identity
 
 from isaaclab_tasks.contrib.velocity.config.g1_29dof_goalconditioned_perception.env_cfg.motion_cfg import (
     FOOT_BODY_NAMES,
@@ -54,7 +52,7 @@ from .mdp import APPROACH, IMITATE, WALK
 STEPS_PER_ITERATION = 24
 """Must match the runner's ``num_steps_per_env``; the schedule is counted in control steps."""
 
-IMITATION_ITERATION = 3000
+IMITATION_ITERATION = 5
 """Iteration from which new episodes approach without waypoint rewards and then imitate."""
 
 
@@ -73,31 +71,26 @@ class G1WaypointMimicCommandsCfg:
 
 @configclass
 class WaypointMimicCommandObsCfg(WaypointCommandObsCfg):
-    """Waypoint position and heading relative to the root, and whether (and where) the clip is playing."""
+    """Horizontal waypoint error in the root yaw frame: the policy's only positional input.
+
+    There is no heading target, height error, or imitation state, so the policy cannot tell walking from imitating.
+    """
 
     waypoint = MirrorObsTerm(
-        func=mimic_mdp.waypoint_pose, mirror=mimic_mdp.mirror_waypoint_pose, params={"command_name": "waypoint"}
-    )
-    imitation = MirrorObsTerm(
-        func=mimic_mdp.imitation_state, mirror=mirror_identity, params={"command_name": "waypoint"}
+        func=mimic_mdp.waypoint_xy_b, mirror=mimic_mdp.mirror_waypoint_xy, params={"command_name": "waypoint"}
     )
 
 
 @configclass
 class WaypointMimicPolicyCfg(WaypointPolicyCfg):
-    """Perception proprioception followed by the root position from the pyramid center."""
+    """Perception proprioception, without the root position on the tile."""
 
-    root_position = MirrorObsTerm(
-        func=mimic_mdp.root_pos_pyramid_b,
-        mirror=waypoint_mdp.mirror_waypoint,
-        noise=Unoise(n_min=-0.02, n_max=0.02),
-        params={"command_name": "waypoint"},
-    )
+    root_position = None
 
 
 @configclass
 class G1WaypointMimicObservationsCfg(G1WaypointObservationsCfg):
-    """The waypoint task's observations with the clip's start heading and the imitation state in ``command``."""
+    """The perception observations with the horizontal waypoint error in ``command`` and no root position."""
 
     policy: WaypointMimicPolicyCfg = WaypointMimicPolicyCfg()
     command: WaypointMimicCommandObsCfg = WaypointMimicCommandObsCfg()
@@ -135,12 +128,13 @@ class G1WaypointMimicRewardsCfg(G1WaypointRewardsCfg):
     * Imitation terms (the goal-conditioned task's weights): :data:`~.mdp.IMITATE` only.
     * ``top_*``: the waypoint position rewards toward the top waypoint, :data:`~.mdp.IMITATE` only.
     * Regularization (:data:`_REGULARIZATION`): every mode.
-    * Every other waypoint task term (gait, posture, and style): :data:`~.mdp.WALK` and :data:`~.mdp.APPROACH`.
+    * ``backward_velocity`` and every other waypoint task term (gait, posture, and style): :data:`~.mdp.WALK` and
+      :data:`~.mdp.APPROACH`.
     """
 
-    waypoint_heading = RewTerm(
-        func=mimic_mdp.waypoint_heading_exp, weight=2.0, params={"command_name": "waypoint", "std": 0.5}
-    )
+    # walking backward toward the waypoint is penalized in walk and approach; the waypoint task's
+    # bearing and facing-scaled progress rewards add to it in walk
+    backward_velocity = RewTerm(func=mimic_mdp.backward_velocity_l2, weight=-2.0)
 
     # while imitating, the waypoint is the clip's end on the top landing
     top_position = RewTerm(
@@ -224,9 +218,10 @@ class G1RoughPerceptionWaypointMimicEnvCfg(G1RoughPerceptionWaypointEnvCfg):
 
     def __post_init__(self):
         super().__post_init__()
-        # every tile holds the clips' pyramid, centered; 9 m tiles leave flat ground for spawns behind its base
+        # every tile holds the clips' pyramid (4.5 m base), centered; 14 m tiles leave flat ground for spawns
+        # up to 4 m behind its base, with a margin to the neighbouring tile
         generator = self.scene.terrain.terrain_generator
-        generator.size = (9.0, 9.0)
+        generator.size = (14.0, 14.0)
         generator.num_rows = 10
         generator.num_cols = 20
         generator.curriculum = False
@@ -244,6 +239,7 @@ class G1RoughPerceptionWaypointMimicEnvCfg_PLAY(G1RoughPerceptionWaypointMimicEn
         super().__post_init__()
         self.scene.num_envs = 16
         self.commands.waypoint.imitation_start_step = 0
+        self.commands.waypoint.print_interval = 25  # every 0.5 s
         self.observations.policy.enable_corruption = False
         self.events.push_robot = None
         self.sim.visualizer_cfgs = [

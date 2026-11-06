@@ -118,12 +118,8 @@ class PyramidMimicCommand(WaypointCommand):
 
     @property
     def waypoint_reached(self) -> torch.Tensor:
-        """Root within the reach radius, height tolerance, and heading tolerance of the clip's start."""
-        return (
-            self.at_waypoint
-            & (self.height_error.abs() < self.cfg.height_tolerance)
-            & (self.heading_error.abs() < self.cfg.heading_tolerance)
-        )
+        """Root within the reach radius and height tolerance of the waypoint; the heading is not checked."""
+        return self.at_waypoint & (self.height_error.abs() < self.cfg.height_tolerance)
 
     @property
     def pyramid_center_w(self) -> torch.Tensor:
@@ -256,8 +252,22 @@ class PyramidMimicCommand(WaypointCommand):
     Implementation specific functions.
     """
 
+    def _print_errors(self, reached: torch.Tensor):
+        """Print each environment's mode and its error to the current waypoint (world frame)."""
+        error = (self.waypoint_pos_w - self.robot.data.root_pos_w.torch).tolist()
+        heading = self.heading_error.tolist()
+        lines = [f"[waypoint] step {self._env.common_step_counter}"]
+        for i, (mode, (dx, dy, dz), yaw, done) in enumerate(zip(self.mode.tolist(), error, heading, reached.tolist())):
+            lines.append(
+                f"  env {i:3d} {MODE_NAMES[mode]:8s} dx {dx:+6.2f} dy {dy:+6.2f} dz {dz:+6.2f} m"
+                f"  xy {math.hypot(dx, dy):5.2f} m  heading {yaw:+5.2f} rad{'  REACHED' if done else ''}"
+            )
+        print("\n".join(lines))
+
     def _update_metrics(self):
         reached = self.waypoint_reached
+        if self.cfg.print_interval > 0 and self._env.common_step_counter % self.cfg.print_interval == 0:
+            self._print_errors(reached)
         self.top_reached |= self.is_imitation & reached
         self.reached |= reached
         # approach episodes start the clip on reaching the waypoint; _update_command advances it to frame 0.
@@ -308,13 +318,13 @@ class PyramidMimicCommandCfg(WaypointCommandCfg):
     imitation_start_step: int = 3000 * 24
     """Control step (iteration times steps per environment) from which episodes approach without reward and imitate."""
 
-    spawn_back_range: tuple[float, float] = (0.5, 1.5)
+    spawn_back_range: tuple[float, float] = (2.0, 4.0)
     """Spawn distance [m] behind the clip's start, along its start heading."""
 
     spawn_lateral_range: tuple[float, float] = (-1.0, 1.0)
     """Spawn offset [m] to the left of the clip's start heading."""
 
-    heading_tolerance: float = 0.4
-    """Yaw error [rad] from the clip's start heading allowed for the waypoint to count as reached."""
+    print_interval: int = 0
+    """Control steps between printouts of each environment's waypoint error; 0 disables them."""
 
     start_yaw_range: tuple[float, float] = (-math.pi, math.pi)

@@ -3,7 +3,7 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Waypoint heading reward."""
+"""Penalty on walking backward."""
 
 from __future__ import annotations
 
@@ -11,13 +11,12 @@ from typing import TYPE_CHECKING
 
 import torch
 
+from isaaclab.managers import SceneEntityCfg
+
 if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedRLEnv
 
-    from .command import PyramidMimicCommand
 
-
-def waypoint_heading_exp(env: ManagerBasedRLEnv, command_name: str, std: float) -> torch.Tensor:
-    """``exp(-e_yaw^2 / std^2)`` of the yaw error [rad] to the clip's start heading, within the reach radius."""
-    command: PyramidMimicCommand = env.command_manager.get_term(command_name)
-    return torch.exp(-command.heading_error.square() / std**2) * command.at_waypoint
+def backward_velocity_l2(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")) -> torch.Tensor:
+    """Squared backward root speed [m^2/s^2]: ``min(v_x, 0)^2`` of the body-frame forward velocity."""
+    return env.scene[asset_cfg.name].data.root_lin_vel_b.torch[:, 0].clamp_max(0.0).square()
