@@ -3,7 +3,7 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Penalty on walking backward."""
+"""Penalty on walking backward and the bonus for reaching the base waypoint."""
 
 from __future__ import annotations
 
@@ -16,7 +16,15 @@ from isaaclab.managers import SceneEntityCfg
 if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedRLEnv
 
+    from .command import PyramidMimicCommand
+
 
 def backward_velocity_l2(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")) -> torch.Tensor:
     """Squared backward root speed [m^2/s^2]: ``min(v_x, 0)^2`` of the body-frame forward velocity."""
     return env.scene[asset_cfg.name].data.root_lin_vel_b.torch[:, 0].clamp_max(0.0).square()
+
+
+def base_reached_bonus(env: ManagerBasedRLEnv, command_name: str) -> torch.Tensor:
+    """1 on the step after an approach episode first reaches the base waypoint, else 0 (never in walk)."""
+    command: PyramidMimicCommand = env.command_manager.get_term(command_name)
+    return command.base_reached_now.float()

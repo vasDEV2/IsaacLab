@@ -77,6 +77,8 @@ class PyramidMimicCommand(WaypointCommand):
         """Clip's last root position [m], standing on the top landing; the waypoint while imitating."""
         self.top_yaw = torch.zeros(self.num_envs, device=self.device)
         self.top_reached = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
+        self.base_reached_now = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
+        """Whether the base waypoint was first reached on the last command update (one step per episode)."""
         num_bodies = len(cfg.body_names)
         self.body_pos_relative_w = torch.zeros(self.num_envs, num_bodies, 3, device=self.device)
         self.body_quat_relative_w = torch.zeros(self.num_envs, num_bodies, 4, device=self.device)
@@ -244,6 +246,7 @@ class PyramidMimicCommand(WaypointCommand):
         self.goal_yaw[pending] = yaw
         self.initial_distance[pending] = (start[:, :2] - spawn[:, :2]).norm(dim=-1)
         self.reached[pending] = False
+        self.base_reached_now[pending] = False
         imitate = self._env.common_step_counter >= cfg.imitation_start_step
         self.mode[pending] = APPROACH if imitate else WALK
         self._pending[pending] = False
@@ -269,6 +272,8 @@ class PyramidMimicCommand(WaypointCommand):
         if self.cfg.print_interval > 0 and self._env.common_step_counter % self.cfg.print_interval == 0:
             self._print_errors(reached)
         self.top_reached |= self.is_imitation & reached
+        # first arrival at the base waypoint of an approach episode; rewarded on the next step, once imitating
+        self.base_reached_now = reached & ~self.reached & (self.mode == APPROACH)
         self.reached |= reached
         # approach episodes start the clip on reaching the waypoint; _update_command advances it to frame 0.
         # The waypoint then moves to the clip's end on the top landing.

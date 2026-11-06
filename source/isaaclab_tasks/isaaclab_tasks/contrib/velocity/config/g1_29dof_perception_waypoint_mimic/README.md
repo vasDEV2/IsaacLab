@@ -41,22 +41,37 @@ The mode of an episode is set when it resets:
 | Mode | Episodes | Rewards |
 | --- | --- | --- |
 | `walk` | reset before iteration 3000 | waypoint task rewards |
-| `approach` | reset from iteration 3000 | same waypoint, no waypoint rewards |
+| `approach` | reset from iteration 3000 | same waypoint, no positive reward at all: only penalties until the base is reached |
 | `imitate` | an `approach` episode once it reaches the waypoint | the goal-conditioned task's imitation rewards, plus position rewards toward the top waypoint |
 
 In `imitate` the clip plays from its first frame with the goal-conditioned task's imitation rewards
 (anchor pose and velocity, body pose, and foot velocity) and reference terminations (anchor height,
 anchor tilt, foot height). The episode ends as a time-out on the clip's last frame.
 
+The reference terminations start loose when imitation is switched on (iteration 3000) and tighten linearly
+over the next 2000 iterations (`TERMINATION_DECAY_ITERATION`), then keep the goal-conditioned task's values.
+The schedule uses the step counter, so a resumed run starts loose again:
+
+| Termination | Iteration 3000 | From iteration 5000 |
+| --- | --- | --- |
+| `anchor_pos` (pelvis height error) | 0.6 m | 0.25 m |
+| `ee_body_pos` (foot height error) | 0.6 m | 0.25 m |
+| `anchor_ori` (tilt) | 1.5 | 0.8 |
+
 When imitation starts, the commanded waypoint moves to the top of the pyramid: the clip's last root pose,
 standing on the top landing (position and heading). `top_position` and `top_position_fine` reward it
 while imitating, with the waypoint task's position kernels (`exp(-‖e‖² / std²)` of the 3D error, std 2.0 m
 and 0.5 m, weight 4 each), so the climb is imitation plus a pull toward the landing.
 
-The waypoint task's gait, posture, and style terms are active in `walk` and `approach` only, along with
+`base_reached` pays a one-off bonus of 100 (`BASE_REACHED_BONUS` in `env_cfg.py`) on first reaching the base
+waypoint in `approach` (not in `walk`). It is the only positive reward before imitation. The reward
+manager scales every term by the step time, so its weight is `100 / step_dt` (5000).
+
+The waypoint task's gait, posture, and style penalties are active in `walk` and `approach` only, along with
 `backward_velocity` (weight -2, `min(v_x, 0)²` of the body-frame forward velocity), which penalizes walking
 backward. In `walk`, the waypoint task's `waypoint_bearing` and facing-scaled `waypoint_progress` also favour
-walking forward toward the waypoint. Its
+walking forward toward the waypoint. The positive gait rewards (`feet_air_time`, `foot_clearance`) are active in
+`walk` only. Its
 regularization terms (termination penalty, undesired contacts, action rate, energy, joint velocity,
 acceleration, and limits) apply in every mode. The goal-conditioned task's imitation sampling schedule,
 task episodes, and reset curriculum are not used.

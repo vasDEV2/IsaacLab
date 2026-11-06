@@ -52,8 +52,15 @@ from .mdp import APPROACH, IMITATE, WALK
 STEPS_PER_ITERATION = 24
 """Must match the runner's ``num_steps_per_env``; the schedule is counted in control steps."""
 
-IMITATION_ITERATION = 5
+IMITATION_ITERATION = 2
 """Iteration from which new episodes approach without waypoint rewards and then imitate."""
+
+TERMINATION_DECAY_ITERATION = 2000
+"""Iterations after :data:`IMITATION_ITERATION` over which the reference termination thresholds tighten to their
+final values."""
+
+BASE_REACHED_BONUS = 100.0
+"""Return paid once per approach episode on first reaching the base waypoint (not in walk)."""
 
 
 @configclass
@@ -128,9 +135,18 @@ class G1WaypointMimicRewardsCfg(G1WaypointRewardsCfg):
     * Imitation terms (the goal-conditioned task's weights): :data:`~.mdp.IMITATE` only.
     * ``top_*``: the waypoint position rewards toward the top waypoint, :data:`~.mdp.IMITATE` only.
     * Regularization (:data:`_REGULARIZATION`): every mode.
-    * ``backward_velocity`` and every other waypoint task term (gait, posture, and style): :data:`~.mdp.WALK` and
+    * ``backward_velocity`` and every other waypoint task penalty (negative weight): :data:`~.mdp.WALK` and
       :data:`~.mdp.APPROACH`.
+    * Every other waypoint task reward (positive weight; gait, posture, and style): :data:`~.mdp.WALK` only, so
+      :data:`~.mdp.APPROACH` has no positive reward until the robot reaches the base and imitation starts.
+    * ``base_reached``: :data:`BASE_REACHED_BONUS`, once per :data:`~.mdp.APPROACH` episode on first reaching the
+      base waypoint (paid on the next step, when the episode already imitates; never in :data:`~.mdp.WALK`).
+      Its weight is set by the environment config, since the reward manager scales every term by the step time.
     """
+
+    base_reached = RewTerm(
+        func=mimic_mdp.base_reached_bonus, weight=BASE_REACHED_BONUS, params={"command_name": "waypoint"}
+    )
 
     # walking backward toward the waypoint is penalized in walk and approach; the waypoint task's
     # bearing and facing-scaled progress rewards add to it in walk
@@ -171,11 +187,14 @@ class G1WaypointMimicRewardsCfg(G1WaypointRewardsCfg):
     def __post_init__(self):
         super().__post_init__()
         for name, term in vars(self).items():
-            if not isinstance(term, RewTerm) or term.func is ModeGated or name in _REGULARIZATION + _IMITATION:
+            # the bonus is zero while imitating by construction, so it needs no gate
+            skip = _REGULARIZATION + _IMITATION + ("base_reached",)
+            if not isinstance(term, RewTerm) or term.func is ModeGated or name in skip:
                 continue
             if name.startswith("top_"):
                 modes = (IMITATE,)
-            elif name.startswith("waypoint_"):
+            elif name.startswith("waypoint_") or term.weight > 0.0:
+                # approach episodes get no positive reward before imitation
                 modes = (WALK,)
             else:
                 modes = (WALK, APPROACH)
@@ -185,17 +204,41 @@ class G1WaypointMimicRewardsCfg(G1WaypointRewardsCfg):
 
 @configclass
 class G1WaypointMimicTerminationsCfg(G1TerminationsCfg):
-    """Falls in every mode; the goal-conditioned task's reference terminations while imitating."""
+    """Falls in every mode; the goal-conditioned task's reference terminations while imitating.
+
+    The reference thresholds start loose at :data:`IMITATION_ITERATION` and tighten linearly to the goal-conditioned
+    task's values over the next :data:`TERMINATION_DECAY_ITERATION` iterations.
+    """
 
     # the clip has played out: a time-out, not a failure
     motion_end = DoneTerm(func=goal_terminations.motion_end, params={"command_name": "waypoint"}, time_out=True)
     anchor_pos = DoneTerm(
-        func=goal_terminations.bad_anchor_height, params={"command_name": "waypoint", "threshold": 0.25}
+        func=mimic_mdp.bad_anchor_height_decaying,
+        params={
+            "command_name": "waypoint",
+            "threshold_start": 0.6,
+            "threshold": 0.25,
+            "decay_steps": TERMINATION_DECAY_ITERATION * STEPS_PER_ITERATION,
+        },
     )
-    anchor_ori = DoneTerm(func=goal_terminations.bad_anchor_tilt, params={"command_name": "waypoint", "threshold": 0.8})
+    anchor_ori = DoneTerm(
+        func=mimic_mdp.bad_anchor_tilt_decaying,
+        params={
+            "command_name": "waypoint",
+            "threshold_start": 1.5,
+            "threshold": 0.8,
+            "decay_steps": TERMINATION_DECAY_ITERATION * STEPS_PER_ITERATION,
+        },
+    )
     ee_body_pos = DoneTerm(
-        func=goal_terminations.bad_body_height,
-        params={"command_name": "waypoint", "threshold": 0.25, "body_names": FOOT_BODY_NAMES},
+        func=mimic_mdp.bad_body_height_decaying,
+        params={
+            "command_name": "waypoint",
+            "threshold_start": 0.6,
+            "threshold": 0.25,
+            "decay_steps": TERMINATION_DECAY_ITERATION * STEPS_PER_ITERATION,
+            "body_names": FOOT_BODY_NAMES,
+        },
     )
 
 
@@ -229,6 +272,8 @@ class G1RoughPerceptionWaypointMimicEnvCfg(G1RoughPerceptionWaypointEnvCfg):
             "motion_pyramid": MotionStairsTerrainCfg(proportion=1.0, motion_file=STAIR_MOTION_FILES[0])
         }
         self.scene.terrain.max_init_terrain_level = None
+        # the reward manager multiplies each term by the step time; pay the full bonus in one step
+        self.rewards.base_reached.weight = BASE_REACHED_BONUS / (self.sim.dt * self.decimation)
 
 
 @configclass
