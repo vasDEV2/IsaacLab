@@ -91,3 +91,36 @@ position. The policy sees no target heading, waypoint height, or imitation state
 `Metrics/waypoint/imitation_phase` is the clip phase at the end; 1.0 means the clip played out.
 `Metrics/waypoint/top_reached` is the fraction of ending episodes that reached the top waypoint.
 `-Play` approaches and imitates from the first step, without pushes.
+
+## Split task
+
+`IsaacContrib-Velocity-Rough-G1-29dof-Perception-Waypoint-Mimic-Split` (and `-Split-Play`) uses the same terrain,
+observations, and networks, in three stages by the iteration at which an episode resets:
+
+| Episodes reset | Mode | Start | Waypoint | Rewards |
+| --- | --- | --- | --- | --- |
+| Before iteration 3000 | `walk` | At rest, 2–4 m behind the clip's start | Pyramid base | Waypoint task, as in the base task's `walk` |
+| 3000–5000, 50% | `walk` | At rest, 2–4 m behind the clip's start | Pyramid base | Waypoint task, as in the base task's `walk` |
+| 3000–5000, 50% | `imitate` | On the clip: root and joints of a random frame (the first frame in 20%) | Clip's end on the top landing | Goal-conditioned task's imitation rewards |
+| From 5000 | `approach`, then `imitate` | At rest, 2–4 m behind the clip's start | Pyramid base, then the clip's end | As in the base task: penalties and the 100 base bonus while approaching; then the imitation rewards and `top_position*` |
+
+The imitation rewards are the goal-conditioned task's seven tracking terms and its own regularization
+(`imitation_alive`, `imitation_joint_acc`, `imitation_joint_torque`, `imitation_action_rate_l2`,
+`imitation_joint_limit`, `imitation_undesired_contacts`, `imitation_feet_slide`), with its weights, in every
+imitation. `top_position` and `top_position_fine` pay only in imitations that followed an approach. Reference joints
+get ±0.1 rad of noise at a reference start.
+
+Imitation ends on the clip's last frame or at the reference thresholds:
+
+| Iteration | Pelvis height | Tilt | Feet height |
+| --- | --- | --- | --- |
+| Before 5000 | 0.25 m | 0.8 | 0.25 m |
+| 5000 | 0.6 m | 1.5 | 0.6 m |
+| From 7000 | 0.25 m | 0.8 | 0.25 m |
+
+Between 5000 and 7000 they tighten linearly, as in the base task after its switch.
+
+`SPLIT_IMITATION_ITERATION` and `SPLIT_APPROACH_ITERATION` in `env_cfg.py` set the stages, and the command's
+`imitation_probability` and `full_clip_probability` set the split. The step counter restarts at zero on every
+launch, so a resumed run starts again from the first stage. Runs log to
+`g1_29dof_perception_ame_waypoint_mimic_split`.

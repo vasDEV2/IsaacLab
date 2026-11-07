@@ -16,12 +16,15 @@ There is no stair curriculum and no imitation sampling schedule.
 
 from isaaclab_visualizers.newton import NewtonGLVisualizerCfg
 
+from isaaclab.managers import EventTermCfg as EventTerm
 from isaaclab.managers import RewardTermCfg as RewTerm
+from isaaclab.managers import SceneEntityCfg
 from isaaclab.managers import TerminationTermCfg as DoneTerm
 from isaaclab.utils.configclass import configclass
 
 from isaaclab_contrib.mdp import MirrorObservationTermCfg as MirrorObsTerm
 
+import isaaclab_tasks.core.velocity.mdp as velocity_mdp
 from isaaclab_tasks.contrib.velocity.config.g1_29dof_goalconditioned_perception.env_cfg.motion_cfg import (
     FOOT_BODY_NAMES,
     STAIR_MOTION_FILES,
@@ -41,6 +44,7 @@ from ..g1_29dof_perception_waypoint import mdp as waypoint_mdp
 from ..g1_29dof_perception_waypoint.env_cfg import (
     G1RoughPerceptionWaypointEnvCfg,
     G1WaypointCurriculumCfg,
+    G1WaypointEventCfg,
     G1WaypointObservationsCfg,
     G1WaypointRewardsCfg,
     WaypointCommandObsCfg,
@@ -187,19 +191,25 @@ class G1WaypointMimicRewardsCfg(G1WaypointRewardsCfg):
     def __post_init__(self):
         super().__post_init__()
         for name, term in vars(self).items():
-            # the bonus is zero while imitating by construction, so it needs no gate
-            skip = _REGULARIZATION + _IMITATION + ("base_reached",)
-            if not isinstance(term, RewTerm) or term.func is ModeGated or name in skip:
+            if not isinstance(term, RewTerm) or term.func is ModeGated:
                 continue
-            if name.startswith("top_"):
-                modes = (IMITATE,)
-            elif name.startswith("waypoint_") or term.weight > 0.0:
-                # approach episodes get no positive reward before imitation
-                modes = (WALK,)
-            else:
-                modes = (WALK, APPROACH)
+            modes = self._gate_modes(name, term)
+            if modes is None:
+                continue
             term.params = {"func": term.func, "func_params": term.params, "modes": modes, "mode_command": "waypoint"}
             term.func = ModeGated
+
+    def _gate_modes(self, name: str, term: RewTerm) -> tuple[int, ...] | None:
+        """Modes in which term ``name`` is paid, or None to leave it ungated."""
+        # the bonus is zero while imitating by construction, so it needs no gate
+        if name in _REGULARIZATION + _IMITATION + ("base_reached",):
+            return None
+        if name.startswith("top_"):
+            return (IMITATE,)
+        if name.startswith("waypoint_") or term.weight > 0.0:
+            # approach episodes get no positive reward before imitation
+            return (WALK,)
+        return (WALK, APPROACH)
 
 
 @configclass
@@ -273,7 +283,8 @@ class G1RoughPerceptionWaypointMimicEnvCfg(G1RoughPerceptionWaypointEnvCfg):
         }
         self.scene.terrain.max_init_terrain_level = None
         # the reward manager multiplies each term by the step time; pay the full bonus in one step
-        self.rewards.base_reached.weight = BASE_REACHED_BONUS / (self.sim.dt * self.decimation)
+        if self.rewards.base_reached is not None:
+            self.rewards.base_reached.weight = BASE_REACHED_BONUS / (self.sim.dt * self.decimation)
 
 
 @configclass
@@ -282,14 +293,161 @@ class G1RoughPerceptionWaypointMimicEnvCfg_PLAY(G1RoughPerceptionWaypointMimicEn
 
     def __post_init__(self):
         super().__post_init__()
-        self.scene.num_envs = 16
-        self.commands.waypoint.imitation_start_step = 0
-        self.commands.waypoint.print_interval = 25  # every 0.5 s
-        self.observations.policy.enable_corruption = False
-        self.events.push_robot = None
-        self.sim.visualizer_cfgs = [
-            NewtonGLVisualizerCfg(
-                origin_type="asset", origin_track_path="robot", eye=(-3.0, -3.0, 2.0), lookat=(0.0, 0.0, 0.3)
-            )
-        ]
-        self.video_recorders = []
+        _configure_play(self)
+
+
+def _configure_play(cfg: G1RoughPerceptionWaypointMimicEnvCfg):
+    """16 environments imitating from the first step, printing waypoint errors, without noise or pushes."""
+    cfg.scene.num_envs = 16
+    cfg.commands.waypoint.imitation_start_step = 0
+    cfg.commands.waypoint.print_interval = 25  # every 0.5 s
+    cfg.observations.policy.enable_corruption = False
+    cfg.events.push_robot = None
+    cfg.sim.visualizer_cfgs = [
+        NewtonGLVisualizerCfg(
+            origin_type="asset", origin_track_path="robot", eye=(-3.0, -3.0, 2.0), lookat=(0.0, 0.0, 0.3)
+        )
+    ]
+    cfg.video_recorders = []
+
+
+"""
+Split task: walk, then walk or imitate from a reference start, then the base task's approach and imitation.
+"""
+
+SPLIT_IMITATION_ITERATION = 1
+"""Iteration from which half of the new episodes imitate from a reference start (split task)."""
+
+SPLIT_APPROACH_ITERATION = 2001
+"""Iteration from which every new episode approaches the base waypoint and then imitates (split task)."""
+
+
+@configclass
+class G1WaypointMimicSplitCommandsCfg(G1WaypointMimicCommandsCfg):
+    """The pyramid-base waypoint, and the clip started either on the reference or at the base."""
+
+    waypoint = mimic_mdp.PyramidMimicSplitCommandCfg(
+        debug_vis=True,
+        motion_files=STAIR_MOTION_FILES,
+        body_names=TRACKED_BODY_NAMES,
+        imitation_start_step=SPLIT_IMITATION_ITERATION * STEPS_PER_ITERATION,
+        approach_start_step=SPLIT_APPROACH_ITERATION * STEPS_PER_ITERATION,
+        imitation_probability=0.5,
+        full_clip_probability=0.2,
+    )
+
+
+@configclass
+class G1WaypointMimicSplitRewardsCfg(G1WaypointMimicRewardsCfg):
+    """The waypoint task's rewards while walking; the goal-conditioned task's rewards while imitating.
+
+    * Walk (:data:`~.mdp.WALK`): every waypoint task term, regularization included, and ``backward_velocity``, as in
+      the walk phase of the base task.
+    * Approach (:data:`~.mdp.APPROACH`, from :data:`SPLIT_APPROACH_ITERATION`): as in the base task, only the
+      penalties (negative weights) and ``base_reached``.
+    * Imitation (:data:`~.mdp.IMITATE`): the goal-conditioned task's seven tracking terms and its own
+      regularization and alive terms (``imitation_*``), with its weights. Imitations that followed an approach also
+      get ``top_position`` and ``top_position_fine``, as in the base task.
+    """
+
+    top_position = RewTerm(
+        func=mimic_mdp.top_position_after_approach_exp,
+        weight=4.0,
+        params={"command_name": "waypoint", "std": 2.0},
+    )
+    top_position_fine = RewTerm(
+        func=mimic_mdp.top_position_after_approach_exp,
+        weight=4.0,
+        params={"command_name": "waypoint", "std": 0.5},
+    )
+
+    imitation_alive = RewTerm(func=velocity_mdp.is_alive, weight=1.0)
+    imitation_joint_acc = RewTerm(func=velocity_mdp.joint_acc_l2, weight=-2.5e-7)
+    imitation_joint_torque = RewTerm(func=velocity_mdp.joint_torques_l2, weight=-1.0e-5)
+    imitation_action_rate_l2 = RewTerm(func=velocity_mdp.action_rate_l2, weight=-0.1)
+    imitation_joint_limit = RewTerm(
+        func=velocity_mdp.joint_pos_limits,
+        weight=-10.0,
+        params={"asset_cfg": SceneEntityCfg("robot", joint_names=".*")},
+    )
+    imitation_undesired_contacts = RewTerm(
+        func=velocity_mdp.undesired_contacts,
+        weight=-0.1,
+        params={
+            "sensor_cfg": SceneEntityCfg(
+                "contact_forces",
+                body_names=[
+                    r"^(?!left_ankle_roll_link$)(?!right_ankle_roll_link$)"
+                    r"(?!left_wrist_yaw_link$)(?!right_wrist_yaw_link$).+$"
+                ],
+            ),
+            "threshold": 1.0,
+        },
+    )
+    imitation_feet_slide = RewTerm(
+        func=velocity_mdp.feet_slide,
+        weight=-0.25,
+        params={
+            "sensor_cfg": SceneEntityCfg("contact_forces", body_names=FOOT_BODY_NAMES),
+            "asset_cfg": SceneEntityCfg("robot", body_names=FOOT_BODY_NAMES),
+        },
+    )
+
+    def _gate_modes(self, name: str, term: RewTerm) -> tuple[int, ...] | None:
+        # the tracking terms, the bonus, and the top terms are zero outside their modes by construction
+        if name in _IMITATION + ("base_reached", "top_position", "top_position_fine"):
+            return None
+        if name.startswith("imitation_"):
+            return (IMITATE,)
+        if name.startswith("waypoint_") or term.weight > 0.0:
+            return (WALK,)
+        return (WALK, APPROACH)
+
+
+@configclass
+class G1WaypointMimicSplitTerminationsCfg(G1WaypointMimicTerminationsCfg):
+    """Falls in every mode; the goal-conditioned task's reference terminations while imitating.
+
+    Before :data:`SPLIT_APPROACH_ITERATION`, imitation starts on the reference and the thresholds are the
+    goal-conditioned task's. From there, as in the base task, they start loose and tighten back over
+    :data:`TERMINATION_DECAY_ITERATION` iterations.
+    """
+
+    def __post_init__(self):
+        super().__post_init__()
+        for term in (self.anchor_pos, self.anchor_ori, self.ee_body_pos):
+            term.params["start_step"] = SPLIT_APPROACH_ITERATION * STEPS_PER_ITERATION
+
+
+@configclass
+class G1WaypointMimicSplitEventCfg(G1WaypointEventCfg):
+    """Walk and approach episodes start at rest at their spawn; reference-start imitations on the clip's frame."""
+
+    reset_base = EventTerm(
+        func=mimic_mdp.reset_root_walk_or_reference, mode="reset", params={"command_name": "waypoint"}
+    )
+    # after the default joint reset, so it overwrites only reference-start imitations
+    reset_reference_joints = EventTerm(
+        func=mimic_mdp.reset_joints_to_reference,
+        mode="reset",
+        params={"command_name": "waypoint", "position_range": (-0.1, 0.1)},
+    )
+
+
+@configclass
+class G1RoughPerceptionWaypointMimicSplitEnvCfg(G1RoughPerceptionWaypointMimicEnvCfg):
+    """Walk to the clips' pyramid base; then also imitate from reference starts; then approach and imitate."""
+
+    commands: G1WaypointMimicSplitCommandsCfg = G1WaypointMimicSplitCommandsCfg()
+    rewards: G1WaypointMimicSplitRewardsCfg = G1WaypointMimicSplitRewardsCfg()
+    terminations: G1WaypointMimicSplitTerminationsCfg = G1WaypointMimicSplitTerminationsCfg()
+    events: G1WaypointMimicSplitEventCfg = G1WaypointMimicSplitEventCfg()
+
+
+@configclass
+class G1RoughPerceptionWaypointMimicSplitEnvCfg_PLAY(G1RoughPerceptionWaypointMimicSplitEnvCfg):
+    """Walk or imitate from a reference start from the first step, without pushes."""
+
+    def __post_init__(self):
+        super().__post_init__()
+        _configure_play(self)

@@ -3,7 +3,7 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Penalty on walking backward and the bonus for reaching the base waypoint."""
+"""Penalty on walking backward, the bonus for reaching the base waypoint, and the top waypoint reward."""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ from isaaclab.managers import SceneEntityCfg
 if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedRLEnv
 
-    from .command import PyramidMimicCommand
+    from .command import PyramidMimicCommand, PyramidMimicSplitCommand
 
 
 def backward_velocity_l2(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")) -> torch.Tensor:
@@ -28,3 +28,12 @@ def base_reached_bonus(env: ManagerBasedRLEnv, command_name: str) -> torch.Tenso
     """1 on the step after an approach episode first reaches the base waypoint, else 0 (never in walk)."""
     command: PyramidMimicCommand = env.command_manager.get_term(command_name)
     return command.base_reached_now.float()
+
+
+def top_position_after_approach_exp(env: ManagerBasedRLEnv, command_name: str, std: float) -> torch.Tensor:
+    """``exp(-|e|^2 / std^2)`` of the root-to-waypoint error [m], only in imitations that followed an approach.
+
+    The waypoint is then the clip's end on the top landing. Imitations started on the reference get zero.
+    """
+    command: PyramidMimicSplitCommand = env.command_manager.get_term(command_name)
+    return torch.exp(-command.error_w.square().sum(dim=-1) / std**2) * command.from_approach

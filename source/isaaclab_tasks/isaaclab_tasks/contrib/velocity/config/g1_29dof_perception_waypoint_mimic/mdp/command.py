@@ -333,3 +333,97 @@ class PyramidMimicCommandCfg(WaypointCommandCfg):
     """Control steps between printouts of each environment's waypoint error; 0 disables them."""
 
     start_yaw_range: tuple[float, float] = (-math.pi, math.pi)
+
+
+class PyramidMimicSplitCommand(PyramidMimicCommand):
+    """:class:`PyramidMimicCommand` with separate walk and imitation episodes after the switch.
+
+    Episodes are drawn by the control step at their reset:
+
+    * Before :attr:`PyramidMimicCommandCfg.imitation_start_step`: :data:`WALK`, as in the parent.
+    * From there until :attr:`PyramidMimicSplitCommandCfg.approach_start_step`: :data:`IMITATE` with probability
+      :attr:`PyramidMimicSplitCommandCfg.imitation_probability`, :data:`WALK` otherwise. Imitation episodes start on
+      the reference (reference state initialization): at a uniformly drawn frame of the clip, or at its first frame
+      with probability :attr:`PyramidMimicSplitCommandCfg.full_clip_probability`. Their waypoint is the clip's last
+      root pose. The reset events read :meth:`reference_root_state` and :meth:`reference_joint_state`.
+    * From :attr:`PyramidMimicSplitCommandCfg.approach_start_step`: :data:`APPROACH`, switching to :data:`IMITATE`
+      at the base waypoint, as in the parent. :attr:`from_approach` marks these imitations.
+    """
+
+    cfg: PyramidMimicSplitCommandCfg
+
+    def __init__(self, cfg: PyramidMimicSplitCommandCfg, env: ManagerBasedRLEnv):
+        super().__init__(cfg, env)
+        self.from_approach = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
+        """Whether the episode imitates after approaching the base waypoint (not from a reference start)."""
+
+    def sample_episode(self, env_ids: Sequence[int] | torch.Tensor | slice):
+        env_ids = self._as_env_ids(env_ids)
+        pending = env_ids[self._pending[env_ids]]
+        if len(pending) == 0:
+            return
+        super().sample_episode(pending)
+        self.from_approach[pending] = False
+        step = self._env.common_step_counter
+        if step >= self.cfg.approach_start_step:
+            return  # approach, then imitate, as drawn by the parent
+        self.mode[pending] = WALK
+        if step < self.cfg.imitation_start_step:
+            return
+        ids = pending[torch.rand(len(pending), device=self.device) < self.cfg.imitation_probability]
+        if len(ids) == 0:
+            return
+        # a frame before the last, so the episode does not end on its first step
+        last = self.motion.lengths[self.motion_ids[ids]] - 1
+        frames = (torch.rand(len(ids), device=self.device) * last).long()
+        full_clip = torch.rand(len(ids), device=self.device) < self.cfg.full_clip_probability
+        self.mode[ids] = IMITATE
+        self.time_steps[ids] = torch.where(full_clip, 0, frames)
+        self.waypoint_pos_w[ids] = self.top_pos_w[ids]
+        self.goal_yaw[ids] = self.top_yaw[ids]
+        self.start_pos_w[ids] = self.reference_root_state(ids)[:, :3]
+
+    def _update_metrics(self):
+        approaching = self.mode == APPROACH
+        super()._update_metrics()
+        self.from_approach |= approaching & self.is_imitation
+
+    def reference_root_state(self, env_ids: torch.Tensor) -> torch.Tensor:
+        """Reference root pose and velocity at each episode's current frame, in the world frame.
+
+        Shape is (len(env_ids), 13): position [m], quaternion (x, y, z, w), linear [m/s] and angular [rad/s]
+        velocity.
+        """
+        frames = self.motion.frame_indices(self.motion_ids[env_ids], self.time_steps[env_ids])
+        root = self.motion_root_index
+        return torch.cat(
+            (
+                self.motion.body_pos_w[frames, root] + self._env.scene.env_origins[env_ids],
+                self.motion.body_quat_w[frames, root],
+                self.motion.body_lin_vel_w[frames, root],
+                self.motion.body_ang_vel_w[frames, root],
+            ),
+            dim=-1,
+        )
+
+    def reference_joint_state(self, env_ids: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        """Reference joint positions [rad] and velocities [rad/s] at each episode's current frame, robot order."""
+        frames = self.motion.frame_indices(self.motion_ids[env_ids], self.time_steps[env_ids])
+        return self.motion.joint_pos[frames], self.motion.joint_vel[frames]
+
+
+@configclass
+class PyramidMimicSplitCommandCfg(PyramidMimicCommandCfg):
+    """Configuration for :class:`PyramidMimicSplitCommand`."""
+
+    class_type: type = PyramidMimicSplitCommand
+
+    imitation_probability: float = 0.5
+    """Fraction of episodes reset between :attr:`imitation_start_step` and :attr:`approach_start_step` that imitate
+    from a reference start; the rest walk."""
+
+    approach_start_step: int = 5000 * 24
+    """Control step from which every episode approaches the base waypoint and then imitates, as in the parent."""
+
+    full_clip_probability: float = 0.2
+    """Fraction of imitation episodes that start at the clip's first frame instead of a random one."""

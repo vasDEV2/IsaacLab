@@ -15,3 +15,10 @@ class G1RoughPerceptionWaypointMimicPPORunnerCfg(G1RoughPerceptionWaypointPPORun
     """Waypoint AME PPO; ``num_steps_per_env`` must match ``env_cfg.STEPS_PER_ITERATION``."""
 
     experiment_name = "g1_29dof_perception_ame_waypoint_mimic"
+
+
+@configclass
+class G1RoughPerceptionWaypointMimicSplitPPORunnerCfg(G1RoughPerceptionWaypointMimicPPORunnerCfg):
+    """The same AME PPO for the split task, logged separately."""
+
+    experiment_name = "g1_29dof_perception_ame_waypoint_mimic_split"
