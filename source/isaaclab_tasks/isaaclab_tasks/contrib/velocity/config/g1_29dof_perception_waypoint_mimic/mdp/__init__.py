@@ -17,5 +17,5 @@ from .command import (
 )
 from .events import reset_joints_to_reference, reset_root_walk_or_reference
 from .observations import mirror_waypoint_xy, waypoint_xy_b
-from .rewards import backward_velocity_l2, base_reached_bonus, top_position_after_approach_exp
+from .rewards import backward_velocity_l2, base_reached_bonus, excess_speed_l2, top_position_after_approach_exp
 from .terminations import bad_anchor_height_decaying, bad_anchor_tilt_decaying, bad_body_height_decaying

@@ -69,7 +69,8 @@ manager scales every term by the step time, so its weight is `100 / step_dt` (50
 
 The waypoint task's gait, posture, and style penalties are active in `walk` and `approach` only, along with
 `backward_velocity` (weight -2, `min(v_x, 0)²` of the body-frame forward velocity), which penalizes walking
-backward. In `walk`, the waypoint task's `waypoint_bearing` and facing-scaled `waypoint_progress` also favour
+backward, and `max_speed` (weight -2, `max(|v_xy| - 1, 0)²` of the horizontal root speed), which discourages
+moving faster than 1 m/s. In `walk`, the waypoint task's `waypoint_bearing` and facing-scaled `waypoint_progress` also favour
 walking forward toward the waypoint. The positive gait rewards (`feet_air_time`, `foot_clearance`) are active in
 `walk` only. Its
 regularization terms (termination penalty, undesired contacts, action rate, energy, joint velocity,

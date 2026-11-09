@@ -3,7 +3,7 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Penalty on walking backward, the bonus for reaching the base waypoint, and the top waypoint reward."""
+"""Penalties on walking backward and too fast, the bonus for reaching the base waypoint, and the top waypoint reward."""
 
 from __future__ import annotations
 
@@ -22,6 +22,14 @@ if TYPE_CHECKING:
 def backward_velocity_l2(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")) -> torch.Tensor:
     """Squared backward root speed [m^2/s^2]: ``min(v_x, 0)^2`` of the body-frame forward velocity."""
     return env.scene[asset_cfg.name].data.root_lin_vel_b.torch[:, 0].clamp_max(0.0).square()
+
+
+def excess_speed_l2(
+    env: ManagerBasedRLEnv, max_speed: float, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")
+) -> torch.Tensor:
+    """Squared horizontal root speed above ``max_speed`` [m^2/s^2]: ``max(|v_xy| - max_speed, 0)^2``."""
+    speed = torch.linalg.norm(env.scene[asset_cfg.name].data.root_lin_vel_w.torch[:, :2], dim=-1)
+    return (speed - max_speed).clamp_min(0.0).square()
 
 
 def base_reached_bonus(env: ManagerBasedRLEnv, command_name: str) -> torch.Tensor:

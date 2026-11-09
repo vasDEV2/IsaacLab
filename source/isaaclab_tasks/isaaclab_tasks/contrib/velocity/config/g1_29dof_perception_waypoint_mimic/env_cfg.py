@@ -139,8 +139,8 @@ class G1WaypointMimicRewardsCfg(G1WaypointRewardsCfg):
     * Imitation terms (the goal-conditioned task's weights): :data:`~.mdp.IMITATE` only.
     * ``top_*``: the waypoint position rewards toward the top waypoint, :data:`~.mdp.IMITATE` only.
     * Regularization (:data:`_REGULARIZATION`): every mode.
-    * ``backward_velocity`` and every other waypoint task penalty (negative weight): :data:`~.mdp.WALK` and
-      :data:`~.mdp.APPROACH`.
+    * ``backward_velocity``, ``max_speed``, and every other waypoint task penalty (negative weight):
+      :data:`~.mdp.WALK` and :data:`~.mdp.APPROACH`.
     * Every other waypoint task reward (positive weight; gait, posture, and style): :data:`~.mdp.WALK` only, so
       :data:`~.mdp.APPROACH` has no positive reward until the robot reaches the base and imitation starts.
     * ``base_reached``: :data:`BASE_REACHED_BONUS`, once per :data:`~.mdp.APPROACH` episode on first reaching the
@@ -155,6 +155,8 @@ class G1WaypointMimicRewardsCfg(G1WaypointRewardsCfg):
     # walking backward toward the waypoint is penalized in walk and approach; the waypoint task's
     # bearing and facing-scaled progress rewards add to it in walk
     backward_velocity = RewTerm(func=mimic_mdp.backward_velocity_l2, weight=-2.0)
+    # the waypoint progress reward stops paying at 1 m/s; clips may exceed it, so this is not paid while imitating
+    max_speed = RewTerm(func=mimic_mdp.excess_speed_l2, weight=-2.0, params={"max_speed": 1.0})
 
     # while imitating, the waypoint is the clip's end on the top landing
     top_position = RewTerm(
