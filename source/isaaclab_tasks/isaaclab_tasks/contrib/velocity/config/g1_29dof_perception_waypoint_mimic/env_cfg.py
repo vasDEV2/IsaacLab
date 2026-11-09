@@ -226,7 +226,7 @@ class G1WaypointMimicTerminationsCfg(G1TerminationsCfg):
         func=mimic_mdp.bad_anchor_height_decaying,
         params={
             "command_name": "waypoint",
-            "threshold_start": 0.6,
+            "threshold_start": 0.4,
             "threshold": 0.25,
             "decay_steps": TERMINATION_DECAY_ITERATION * STEPS_PER_ITERATION,
         },
@@ -244,7 +244,7 @@ class G1WaypointMimicTerminationsCfg(G1TerminationsCfg):
         func=mimic_mdp.bad_body_height_decaying,
         params={
             "command_name": "waypoint",
-            "threshold_start": 0.6,
+            "threshold_start": 0.4,
             "threshold": 0.25,
             "decay_steps": TERMINATION_DECAY_ITERATION * STEPS_PER_ITERATION,
             "body_names": FOOT_BODY_NAMES,
@@ -332,8 +332,8 @@ class G1WaypointMimicSplitCommandsCfg(G1WaypointMimicCommandsCfg):
         body_names=TRACKED_BODY_NAMES,
         imitation_start_step=SPLIT_IMITATION_ITERATION * STEPS_PER_ITERATION,
         approach_start_step=SPLIT_APPROACH_ITERATION * STEPS_PER_ITERATION,
-        imitation_probability=0.5,
-        full_clip_probability=0.2,
+        imitation_probability=0.8,
+        full_clip_probability=0.6,
     )
 
 

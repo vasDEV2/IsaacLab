@@ -3,7 +3,7 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Resets for :class:`~.command.PyramidMimicSplitCommand`: walk episodes at rest, imitation episodes on the clip."""
+"""Resets for :class:`~.command.PyramidMimicSplitCommand`: walk episodes at rest, imitations at their start state."""
 
 from __future__ import annotations
 
@@ -22,7 +22,7 @@ if TYPE_CHECKING:
 
 
 def reset_root_walk_or_reference(env: ManagerBasedRLEnv, env_ids: torch.Tensor, command_name: str) -> None:
-    """Draw the coming episode; walk episodes start at rest at their spawn, imitation episodes on the reference root."""
+    """Draw the coming episode; walk episodes start at their spawn, imitations at their start state."""
     command: PyramidMimicSplitCommand = env.command_manager.get_term(command_name)
     env_ids = command._as_env_ids(env_ids)
     command.sample_episode(env_ids)
@@ -31,7 +31,7 @@ def reset_root_walk_or_reference(env: ManagerBasedRLEnv, env_ids: torch.Tensor, 
     if len(walk_ids) > 0:
         reset_root_at_waypoint_start(env, walk_ids, command_name)
     if len(imitation_ids) > 0:
-        state = command.reference_root_state(imitation_ids)
+        state = command.imitation_root_state(imitation_ids)
         command.robot.write_root_pose_to_sim_index(root_pose=state[:, :7], env_ids=imitation_ids)
         command.robot.write_root_velocity_to_sim_index(root_velocity=state[:, 7:], env_ids=imitation_ids)
 
@@ -42,7 +42,7 @@ def reset_joints_to_reference(
     command_name: str,
     position_range: tuple[float, float] = (-0.1, 0.1),
 ) -> None:
-    """Write the reference joints of imitation episodes; walk episodes keep the preceding joint reset.
+    """Write the start joints of imitation episodes; walk episodes keep the preceding joint reset.
 
     ``position_range`` [rad] adds uniform noise to every joint before clipping to the soft limits.
     """
@@ -53,7 +53,7 @@ def reset_joints_to_reference(
     if len(env_ids) == 0:
         return
     robot = command.robot
-    joint_pos, joint_vel = command.reference_joint_state(env_ids)
+    joint_pos, joint_vel = command.imitation_joint_state(env_ids)
     joint_pos = joint_pos + math_utils.sample_uniform(*position_range, joint_pos.shape, env.device)
     limits = robot.data.soft_joint_pos_limits.torch[env_ids]
     joint_pos = joint_pos.clamp(limits[..., 0], limits[..., 1])

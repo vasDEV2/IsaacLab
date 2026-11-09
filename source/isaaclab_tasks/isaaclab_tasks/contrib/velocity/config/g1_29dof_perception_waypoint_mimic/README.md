@@ -101,7 +101,7 @@ observations, and networks, in three stages by the iteration at which an episode
 | --- | --- | --- | --- | --- |
 | Before iteration 3000 | `walk` | At rest, 2–4 m behind the clip's start | Pyramid base | Waypoint task, as in the base task's `walk` |
 | 3000–5000, 50% | `walk` | At rest, 2–4 m behind the clip's start | Pyramid base | Waypoint task, as in the base task's `walk` |
-| 3000–5000, 50% | `imitate` | On the clip: root and joints of a random frame (the first frame in 20%) | Clip's end on the top landing | Goal-conditioned task's imitation rewards |
+| 3000–5000, 50% | `imitate` | A random frame of the clip, or the clip's beginning from a recorded end-of-walk state (`full_clip_probability`) | Clip's end on the top landing | Goal-conditioned task's imitation rewards |
 | From 5000 | `approach`, then `imitate` | At rest, 2–4 m behind the clip's start | Pyramid base, then the clip's end | As in the base task: penalties and the 100 base bonus while approaching; then the imitation rewards and `top_position*` |
 
 The imitation rewards are the goal-conditioned task's seven tracking terms and its own regularization
@@ -109,6 +109,11 @@ The imitation rewards are the goal-conditioned task's seven tracking terms and i
 `imitation_joint_limit`, `imitation_undesired_contacts`, `imitation_feet_slide`), with its weights, in every
 imitation. `top_position` and `top_position_fine` pay only in imitations that followed an approach. Reference joints
 get ±0.1 rad of noise at a reference start.
+
+When a walk episode first reaches the base waypoint, its root and joint state are recorded relative to the waypoint
+and the clip's start heading. Imitation episodes that start at the clip's first frame begin from one of these states,
+moved to their own clip, so they begin as a walk ends. Until 64 states exist (`walk_end_min_states`) they use the
+clip's first pose. `Metrics/waypoint/walk_end_start` is the fraction of ending episodes that began this way.
 
 Imitation ends on the clip's last frame or at the reference thresholds:
 

@@ -344,8 +344,10 @@ class PyramidMimicSplitCommand(PyramidMimicCommand):
     * From there until :attr:`PyramidMimicSplitCommandCfg.approach_start_step`: :data:`IMITATE` with probability
       :attr:`PyramidMimicSplitCommandCfg.imitation_probability`, :data:`WALK` otherwise. Imitation episodes start on
       the reference (reference state initialization): at a uniformly drawn frame of the clip, or at its first frame
-      with probability :attr:`PyramidMimicSplitCommandCfg.full_clip_probability`. Their waypoint is the clip's last
-      root pose. The reset events read :meth:`reference_root_state` and :meth:`reference_joint_state`.
+      with probability :attr:`PyramidMimicSplitCommandCfg.full_clip_probability`. Episodes at the first frame start
+      from a state in which a walk episode reached the base waypoint, once enough have been recorded, instead of the
+      clip's first pose. The waypoint of every imitation is the clip's last root pose. The reset events read
+      :meth:`imitation_root_state` and :meth:`imitation_joint_state`.
     * From :attr:`PyramidMimicSplitCommandCfg.approach_start_step`: :data:`APPROACH`, switching to :data:`IMITATE`
       at the base waypoint, as in the parent. :attr:`from_approach` marks these imitations.
     """
@@ -356,6 +358,19 @@ class PyramidMimicSplitCommand(PyramidMimicCommand):
         super().__init__(cfg, env)
         self.from_approach = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
         """Whether the episode imitates after approaching the base waypoint (not from a reference start)."""
+        self.from_walk_end = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
+        """Whether the imitation episode starts from a recorded end-of-walk state instead of the reference."""
+        self._start_root_state = torch.zeros(self.num_envs, 13, device=self.device)
+        self._start_joint_pos = torch.zeros_like(self.robot.data.joint_pos.torch)
+        self._start_joint_vel = torch.zeros_like(self.robot.data.joint_vel.torch)
+        # end-of-walk states; the root is stored in the frame of the base waypoint and the clip's start heading
+        size = cfg.walk_end_buffer_size
+        self._walk_end_root = torch.zeros(size, 13, device=self.device)
+        self._walk_end_joint_pos = torch.zeros(size, self._start_joint_pos.shape[1], device=self.device)
+        self._walk_end_joint_vel = torch.zeros_like(self._walk_end_joint_pos)
+        self._walk_end_count = 0
+        self._walk_end_cursor = 0
+        self.metrics["walk_end_start"] = torch.zeros(self.num_envs, device=self.device)
 
     def sample_episode(self, env_ids: Sequence[int] | torch.Tensor | slice):
         env_ids = self._as_env_ids(env_ids)
@@ -364,6 +379,7 @@ class PyramidMimicSplitCommand(PyramidMimicCommand):
             return
         super().sample_episode(pending)
         self.from_approach[pending] = False
+        self.from_walk_end[pending] = False
         step = self._env.common_step_counter
         if step >= self.cfg.approach_start_step:
             return  # approach, then imitate, as drawn by the parent
@@ -379,14 +395,85 @@ class PyramidMimicSplitCommand(PyramidMimicCommand):
         full_clip = torch.rand(len(ids), device=self.device) < self.cfg.full_clip_probability
         self.mode[ids] = IMITATE
         self.time_steps[ids] = torch.where(full_clip, 0, frames)
+        if self._walk_end_count >= self.cfg.walk_end_min_states:
+            self._draw_walk_end_states(ids[full_clip])
         self.waypoint_pos_w[ids] = self.top_pos_w[ids]
         self.goal_yaw[ids] = self.top_yaw[ids]
-        self.start_pos_w[ids] = self.reference_root_state(ids)[:, :3]
+        self.start_pos_w[ids] = self.imitation_root_state(ids)[:, :3]
 
     def _update_metrics(self):
+        self._record_walk_end_states()
         approaching = self.mode == APPROACH
         super()._update_metrics()
         self.from_approach |= approaching & self.is_imitation
+        self.metrics["walk_end_start"][:] = self.from_walk_end.float()
+
+    def _record_walk_end_states(self):
+        """Store the state of every walk episode that first reaches the base waypoint on this step."""
+        ids = (((self.mode == WALK) & self.waypoint_reached & ~self.reached).nonzero(as_tuple=False)).flatten()
+        count = len(ids)
+        if count == 0:
+            return
+        data = self.robot.data
+        yaw = self._yaw_quat(self.goal_yaw[ids])
+        root = torch.cat(
+            (
+                math_utils.quat_apply_inverse(yaw, data.root_pos_w.torch[ids] - self.waypoint_pos_w[ids]),
+                math_utils.quat_mul(math_utils.quat_inv(yaw), data.root_quat_w.torch[ids]),
+                math_utils.quat_apply_inverse(yaw, data.root_lin_vel_w.torch[ids]),
+                math_utils.quat_apply_inverse(yaw, data.root_ang_vel_w.torch[ids]),
+            ),
+            dim=-1,
+        )
+        size = self.cfg.walk_end_buffer_size
+        slots = (self._walk_end_cursor + torch.arange(count, device=self.device)) % size
+        self._walk_end_root[slots] = root
+        self._walk_end_joint_pos[slots] = data.joint_pos.torch[ids]
+        self._walk_end_joint_vel[slots] = data.joint_vel.torch[ids]
+        self._walk_end_cursor = (self._walk_end_cursor + count) % size
+        self._walk_end_count = min(self._walk_end_count + count, size)
+
+    def _draw_walk_end_states(self, ids: torch.Tensor):
+        """Give ``ids`` recorded end-of-walk states, moved to their clip's base waypoint and start heading."""
+        if len(ids) == 0:
+            return
+        drawn = torch.randint(self._walk_end_count, (len(ids),), device=self.device)
+        stored = self._walk_end_root[drawn]
+        # called before the waypoint moves to the top landing
+        yaw = self._yaw_quat(self.goal_yaw[ids])
+        self._start_root_state[ids] = torch.cat(
+            (
+                self.waypoint_pos_w[ids] + math_utils.quat_apply(yaw, stored[:, :3]),
+                math_utils.quat_mul(yaw, stored[:, 3:7]),
+                math_utils.quat_apply(yaw, stored[:, 7:10]),
+                math_utils.quat_apply(yaw, stored[:, 10:13]),
+            ),
+            dim=-1,
+        )
+        self._start_joint_pos[ids] = self._walk_end_joint_pos[drawn]
+        self._start_joint_vel[ids] = self._walk_end_joint_vel[drawn]
+        self.from_walk_end[ids] = True
+
+    def _yaw_quat(self, yaw: torch.Tensor) -> torch.Tensor:
+        return math_utils.quat_from_euler_xyz(torch.zeros_like(yaw), torch.zeros_like(yaw), yaw)
+
+    def imitation_root_state(self, env_ids: torch.Tensor) -> torch.Tensor:
+        """Root state an imitation episode starts from: a recorded end-of-walk state or the reference's.
+
+        Same layout as :meth:`reference_root_state`.
+        """
+        state = self.reference_root_state(env_ids)
+        walk_end = self.from_walk_end[env_ids]
+        state[walk_end] = self._start_root_state[env_ids[walk_end]]
+        return state
+
+    def imitation_joint_state(self, env_ids: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        """Joint positions [rad] and velocities [rad/s] an imitation episode starts from, robot order."""
+        joint_pos, joint_vel = self.reference_joint_state(env_ids)
+        walk_end = self.from_walk_end[env_ids].unsqueeze(-1)
+        joint_pos = torch.where(walk_end, self._start_joint_pos[env_ids], joint_pos)
+        joint_vel = torch.where(walk_end, self._start_joint_vel[env_ids], joint_vel)
+        return joint_pos, joint_vel
 
     def reference_root_state(self, env_ids: torch.Tensor) -> torch.Tensor:
         """Reference root pose and velocity at each episode's current frame, in the world frame.
@@ -426,4 +513,11 @@ class PyramidMimicSplitCommandCfg(PyramidMimicCommandCfg):
     """Control step from which every episode approaches the base waypoint and then imitates, as in the parent."""
 
     full_clip_probability: float = 0.2
-    """Fraction of imitation episodes that start at the clip's first frame instead of a random one."""
+    """Fraction of imitation episodes that start at the clip's first frame instead of a random one. These start from
+    recorded end-of-walk states once at least :attr:`walk_end_min_states` exist."""
+
+    walk_end_buffer_size: int = 4096
+    """End-of-walk states kept; the oldest are overwritten."""
+
+    walk_end_min_states: int = 64
+    """Recorded states needed before they are used; until then the episode starts on the clip's first pose."""
