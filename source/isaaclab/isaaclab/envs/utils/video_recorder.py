@@ -76,6 +76,7 @@ class VideoRecorder:
         self._step_count = 0
         self._clip_index = max(self._existing_clip_indices(), default=-1) + 1
         self._recording = False
+        self._warned_resize = False
 
     def step(self) -> None:
         """Advance the recorder by one env step."""
@@ -98,7 +99,7 @@ class VideoRecorder:
             if clip_step % self.cfg.frame_stride == 0:
                 frame = self._capture()
                 if frame is not None:
-                    self._frames.append(frame)
+                    self._frames.append(self._match_clip_size(frame))
             if clip_step >= self.cfg.video_length:
                 self._close_clip()
 
@@ -110,6 +111,24 @@ class VideoRecorder:
     # ------------------------------------------------------------------
     # Private helpers
     # ------------------------------------------------------------------
+
+    def _match_clip_size(self, frame: np.ndarray) -> np.ndarray:
+        """Resize ``frame`` to the clip's first frame, since a visualizer window can be resized mid-clip."""
+        if not self._frames or frame.shape[:2] == self._frames[0].shape[:2]:
+            return frame
+        from PIL import Image
+
+        height, width = self._frames[0].shape[:2]
+        if not self._warned_resize:
+            logger.warning(
+                "[VideoRecorder] Frame size changed from %dx%d to %dx%d (window resized?); resizing to the clip size.",
+                width,
+                height,
+                frame.shape[1],
+                frame.shape[0],
+            )
+            self._warned_resize = True
+        return np.asarray(Image.fromarray(frame).resize((width, height), Image.BILINEAR))
 
     def _clip_path(self, index: int) -> str:
         return os.path.join(self.cfg.output_dir or "videos", f"{self.cfg.output_filename_prefix}_{index:04d}.mp4")

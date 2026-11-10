@@ -3,7 +3,8 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Penalties on walking backward and too fast, the bonus for reaching the base waypoint, and the top waypoint reward."""
+"""Penalties on walking backward and too fast, the bonus for reaching the base waypoint, the top waypoint reward,
+and the curriculum's loose tracking rewards."""
 
 from __future__ import annotations
 
@@ -12,6 +13,9 @@ from typing import TYPE_CHECKING
 import torch
 
 from isaaclab.managers import SceneEntityCfg
+from isaaclab.utils.math import quat_error_magnitude
+
+from .command import IMITATE_LOOSE
 
 if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedRLEnv
@@ -45,3 +49,42 @@ def top_position_after_approach_exp(env: ManagerBasedRLEnv, command_name: str, s
     """
     command: PyramidMimicSplitCommand = env.command_manager.get_term(command_name)
     return torch.exp(-command.error_w.square().sum(dim=-1) / std**2) * command.from_approach
+
+
+"""
+Loose tracking: full reward within a tolerance of the clip, so closing in further pays nothing more.
+"""
+
+
+def _loose_exp(command: PyramidMimicCommand, error: torch.Tensor, tolerance: float, std: float) -> torch.Tensor:
+    """``exp(-max(error - tolerance, 0)^2 / std^2)`` in :data:`~.command.IMITATE_LOOSE`, else 0."""
+    excess = (error - tolerance).clamp_min(0.0)
+    return torch.exp(-excess.square() / std**2) * (command.mode == IMITATE_LOOSE)
+
+
+def loose_anchor_pos_exp(env: ManagerBasedRLEnv, command_name: str, tolerance: float, std: float) -> torch.Tensor:
+    """Anchor position error [m] from the fitted reference, flat within ``tolerance``."""
+    command: PyramidMimicCommand = env.command_manager.get_term(command_name)
+    error = (command.anchor_pos_w - command.robot_anchor_pos_w).norm(dim=-1)
+    return _loose_exp(command, error, tolerance, std)
+
+
+def loose_anchor_ori_exp(env: ManagerBasedRLEnv, command_name: str, tolerance: float, std: float) -> torch.Tensor:
+    """Anchor orientation error [rad] from the reference, flat within ``tolerance``."""
+    command: PyramidMimicCommand = env.command_manager.get_term(command_name)
+    error = quat_error_magnitude(command.anchor_quat_w, command.robot_anchor_quat_w)
+    return _loose_exp(command, error, tolerance, std)
+
+
+def loose_body_pos_exp(env: ManagerBasedRLEnv, command_name: str, tolerance: float, std: float) -> torch.Tensor:
+    """Mean tracked body position error [m] from the anchor-aligned reference, flat within ``tolerance``."""
+    command: PyramidMimicCommand = env.command_manager.get_term(command_name)
+    error = (command.body_pos_relative_w - command.robot_body_pos_w).norm(dim=-1).mean(dim=-1)
+    return _loose_exp(command, error, tolerance, std)
+
+
+def loose_body_ori_exp(env: ManagerBasedRLEnv, command_name: str, tolerance: float, std: float) -> torch.Tensor:
+    """Mean tracked body orientation error [rad] from the anchor-aligned reference, flat within ``tolerance``."""
+    command: PyramidMimicCommand = env.command_manager.get_term(command_name)
+    error = quat_error_magnitude(command.body_quat_relative_w, command.robot_body_quat_w).mean(dim=-1)
+    return _loose_exp(command, error, tolerance, std)

@@ -95,8 +95,9 @@ position. The policy sees no target heading, waypoint height, or imitation state
 
 ## Split task
 
-`IsaacContrib-Velocity-Rough-G1-29dof-Perception-Waypoint-Mimic-Split` (and `-Split-Play`) uses the same terrain,
-observations, and networks, in three stages by the iteration at which an episode resets:
+`IsaacContrib-Velocity-Rough-G1-29dof-Perception-Waypoint-Mimic-Split` uses the same terrain, observations, and
+networks, in three stages by the iteration at which an episode resets. `-Split-Play` runs only the last stage
+(approach, then imitate) from the first step, without pushes:
 
 | Episodes reset | Mode | Start | Waypoint | Rewards |
 | --- | --- | --- | --- | --- |
@@ -130,3 +131,34 @@ Between 5000 and 7000 they tighten linearly, as in the base task after its switc
 `imitation_probability` and `full_clip_probability` set the split. The step counter restarts at zero on every
 launch, so a resumed run starts again from the first stage. Runs log to
 `g1_29dof_perception_ame_waypoint_mimic_split`.
+
+### Pyramid curriculum stage
+
+From `SPLIT_CURRICULUM_ITERATION`, a fraction `CURRICULUM_PROBABILITY` of the resetting episodes run the pyramid
+curriculum and the rest approach and imitate on the clip's pyramid as before. The terrain is a grid of 17 rows
+(levels) by 20 columns: columns 0–3 hold the clip's pyramid, the others the clip's pyramid with every box widened by
+the tile's top width change and its heights scaled by the tile's step scale (`PYRAMID_CURRICULUM` in `env_cfg.py`,
+`PyramidCurriculumCfg` in `mdp/terrains.py`):
+
+| Levels | Top width (clip: 2.5 m) | Step heights |
+| --- | --- | --- |
+| 0 | The clip's | The clip's |
+| 1–8 | Spread around the clip's over a range that opens to 1.0–4.0 m | The clip's |
+| 9–16 | Random over 1.0–4.0 m | Spread around the clip's over a range that opens to 0.63–1.58 times |
+
+Each curriculum column has its own fixed place in the spread, so on every level some pyramids are smaller than the
+clip's and some larger, and the differences grow with the level. A robot's level moves on its curriculum episodes
+only: up, with probability 0.25, after reaching the top waypoint; down after ending before half the clip without
+reaching it. `CURRICULUM_REPLAY_PROBABILITY` of curriculum episodes run on a random level at or below the robot's.
+Levels restart at 0 on every launch. `Curriculum/pyramid_tiles/level_mean` and `level_max` log the levels.
+
+A curriculum episode's only waypoint, the one the policy observes, is the center of the top landing (at the
+clip's end height) from the start. The base waypoint is kept internally: when the root reaches the base line of
+the face the clip climbs (within the reach radius of it, anywhere along it), the episode imitates in
+`imitate_loose`, with the clip moved sideways along the face onto the robot. The clip is moved onto the
+pyramid: out along its face by half the top width change, and up by its pyramid height under the root (smoothed)
+times the step scale minus one. The strict tracking terms are off; the `loose_*` terms pay their full weight anywhere
+within a tolerance of this reference (anchor 0.4 m and 0.5 rad, mean body 0.2 m and 0.5 rad), so tracking it more
+closely pays nothing more. The reference terminations are fixed at 0.5 m pelvis height, 1.5 tilt, and 0.5 m feet
+height. The `imitation_*` regularization terms and `top_position*` apply as in the strict imitation. Spawns in front
+of wider pyramids are shortened to stay within 6.4 m of the pyramid center.

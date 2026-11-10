@@ -16,6 +16,8 @@ There is no stair curriculum and no imitation sampling schedule.
 
 from isaaclab_visualizers.newton import NewtonGLVisualizerCfg
 
+from isaaclab.envs.utils.video_recorder_cfg import VideoRecorderCfg
+from isaaclab.managers import CurriculumTermCfg as CurrTerm
 from isaaclab.managers import EventTermCfg as EventTerm
 from isaaclab.managers import RewardTermCfg as RewTerm
 from isaaclab.managers import SceneEntityCfg
@@ -51,7 +53,7 @@ from ..g1_29dof_perception_waypoint.env_cfg import (
     WaypointPolicyCfg,
 )
 from . import mdp as mimic_mdp
-from .mdp import APPROACH, IMITATE, WALK
+from .mdp import APPROACH, IMITATE, IMITATE_LOOSE, WALK
 
 STEPS_PER_ITERATION = 24
 """Must match the runner's ``num_steps_per_env``; the schedule is counted in control steps."""
@@ -303,14 +305,40 @@ def _configure_play(cfg: G1RoughPerceptionWaypointMimicEnvCfg):
     cfg.scene.num_envs = 16
     cfg.commands.waypoint.imitation_start_step = 0
     cfg.commands.waypoint.print_interval = 25  # every 0.5 s
+    # a single waypoint on the top landing (the clip's end): walk straight up, no base stop and no imitation
+    cfg.commands.waypoint.top_waypoint_only = True
     cfg.observations.policy.enable_corruption = False
     cfg.events.push_robot = None
+    # no reference-error terminations: only falls, time-outs, and the clip's end reset an episode
+    cfg.terminations.anchor_pos = None
+    cfg.terminations.anchor_ori = None
+    cfg.terminations.ee_body_pos = None
+    # placed once over env 0's pyramid (the tile center), then free to move with the mouse; no robot tracking.
+    # Video recorders capture this camera, so its start pose is what a recording sees.
     cfg.sim.visualizer_cfgs = [
-        NewtonGLVisualizerCfg(
-            origin_type="asset", origin_track_path="robot", eye=(-3.0, -3.0, 2.0), lookat=(0.0, 0.0, 0.3)
-        )
+        NewtonGLVisualizerCfg(origin_type="env", origin_env_index=0, eye=(-9.0, -9.0, 7.0), lookat=(0.0, 0.0, 0.5))
     ]
-    cfg.video_recorders = []
+    # cfg.video_recorders = []
+    cfg.video_recorders = [
+        VideoRecorderCfg(
+            source="visualizer:newton_gl",
+            output_dir="logs/videos",
+            video_length=1000,
+            video_interval=2000,
+        ),
+    ]
+
+    # uniform stairs in place of the clip's pyramid, same center; the clip reference still follows its own stairs
+    cfg.scene.terrain.terrain_generator.sub_terrains = {
+        "uniform_pyramid": mimic_mdp.UniformPyramidStairsTerrainCfg(
+            proportion=1.0,
+            motion_file=STAIR_MOTION_FILES[0],
+            num_steps=6,  # steps, the top landing included
+            step_height=0.19,  # rise of every step [m]
+            step_width=0.25,  # depth of every step [m]
+            top_width=4.5,  # top landing side [m]; footprint = top_width + 2 * step_width * (num_steps - 1)
+        )
+    }
 
 
 """
@@ -320,8 +348,32 @@ Split task: walk, then walk or imitate from a reference start, then the base tas
 SPLIT_IMITATION_ITERATION = 1
 """Iteration from which half of the new episodes imitate from a reference start (split task)."""
 
-SPLIT_APPROACH_ITERATION = 2001
+SPLIT_APPROACH_ITERATION = 2
 """Iteration from which every new episode approaches the base waypoint and then imitates (split task)."""
+
+SPLIT_CURRICULUM_ITERATION = 3
+"""Iteration from which episodes are split between the approach-and-imitate regime and the pyramid curriculum
+(split task). Must not be before :data:`SPLIT_APPROACH_ITERATION`."""
+
+CURRICULUM_PROBABILITY = 0.9
+"""Fraction of episodes after :data:`SPLIT_CURRICULUM_ITERATION` that run the pyramid curriculum; the rest
+approach and imitate on the clip's pyramid as before."""
+
+CURRICULUM_REPLAY_PROBABILITY = 0.2
+"""Fraction of curriculum episodes replayed on a random level at or below the robot's own."""
+
+PYRAMID_CURRICULUM = mimic_mdp.PyramidCurriculumCfg(
+    start_step=SPLIT_CURRICULUM_ITERATION * STEPS_PER_ITERATION,
+    curriculum_probability=CURRICULUM_PROBABILITY,
+    replay_probability=CURRICULUM_REPLAY_PROBABILITY,
+    promotion_probability=0.25,
+    width_levels=8,
+    height_levels=8,
+    top_width_delta_range=(-1.5, 1.5),  # top 1.0 to 4.0 m (clip: 2.5 m)
+    step_scale_range=(0.63, 1.58),  # rises about 0.12 to 0.30 m (clip: 0.19 m on average)
+)
+"""Pyramid curriculum: top width levels, then step height levels with random top widths. See
+:class:`~.mdp.PyramidCurriculumCfg`."""
 
 
 @configclass
@@ -336,6 +388,7 @@ class G1WaypointMimicSplitCommandsCfg(G1WaypointMimicCommandsCfg):
         approach_start_step=SPLIT_APPROACH_ITERATION * STEPS_PER_ITERATION,
         imitation_probability=0.8,
         full_clip_probability=0.6,
+        pyramid_curriculum=PYRAMID_CURRICULUM,
     )
 
 
@@ -395,12 +448,38 @@ class G1WaypointMimicSplitRewardsCfg(G1WaypointMimicRewardsCfg):
         },
     )
 
+    # pyramid curriculum (IMITATE_LOOSE): full reward within a wide tolerance of the fitted clip, so tracking it
+    # more closely pays nothing more; the clip only roughly fits pyramids of another size
+    loose_anchor_pos = RewTerm(
+        func=mimic_mdp.loose_anchor_pos_exp,
+        weight=2.0,
+        params={"command_name": "waypoint", "tolerance": 0.4, "std": 0.5},
+    )
+    loose_anchor_ori = RewTerm(
+        func=mimic_mdp.loose_anchor_ori_exp,
+        weight=2.0,
+        params={"command_name": "waypoint", "tolerance": 0.5, "std": 0.6},
+    )
+    loose_body_pos = RewTerm(
+        func=mimic_mdp.loose_body_pos_exp,
+        weight=1.0,
+        params={"command_name": "waypoint", "tolerance": 0.2, "std": 0.3},
+    )
+    loose_body_ori = RewTerm(
+        func=mimic_mdp.loose_body_ori_exp,
+        weight=1.0,
+        params={"command_name": "waypoint", "tolerance": 0.5, "std": 0.6},
+    )
+
     def _gate_modes(self, name: str, term: RewTerm) -> tuple[int, ...] | None:
-        # the tracking terms, the bonus, and the top terms are zero outside their modes by construction
-        if name in _IMITATION + ("base_reached", "top_position", "top_position_fine"):
+        # the bonus, the top terms, and the loose terms are zero outside their modes by construction
+        if name in ("base_reached", "top_position", "top_position_fine") or name.startswith("loose_"):
             return None
-        if name.startswith("imitation_"):
+        if name in _IMITATION:
+            # strict tracking only; the curriculum's loose imitation uses the loose_* terms
             return (IMITATE,)
+        if name.startswith("imitation_"):
+            return (IMITATE, IMITATE_LOOSE)
         if name.startswith("waypoint_") or term.weight > 0.0:
             return (WALK,)
         return (WALK, APPROACH)
@@ -415,10 +494,50 @@ class G1WaypointMimicSplitTerminationsCfg(G1WaypointMimicTerminationsCfg):
     :data:`TERMINATION_DECAY_ITERATION` iterations.
     """
 
+    # pyramid curriculum (IMITATE_LOOSE): fixed, loose limits, since the clip only roughly fits other pyramids
+    anchor_pos_loose = DoneTerm(
+        func=mimic_mdp.bad_anchor_height_decaying,
+        params={
+            "command_name": "waypoint",
+            "threshold_start": 0.5,
+            "threshold": 0.5,
+            "decay_steps": 1,
+            "modes": (IMITATE_LOOSE,),
+        },
+    )
+    anchor_ori_loose = DoneTerm(
+        func=mimic_mdp.bad_anchor_tilt_decaying,
+        params={
+            "command_name": "waypoint",
+            "threshold_start": 1.5,
+            "threshold": 1.5,
+            "decay_steps": 1,
+            "modes": (IMITATE_LOOSE,),
+        },
+    )
+    ee_body_pos_loose = DoneTerm(
+        func=mimic_mdp.bad_body_height_decaying,
+        params={
+            "command_name": "waypoint",
+            "threshold_start": 0.5,
+            "threshold": 0.5,
+            "decay_steps": 1,
+            "body_names": FOOT_BODY_NAMES,
+            "modes": (IMITATE_LOOSE,),
+        },
+    )
+
     def __post_init__(self):
         super().__post_init__()
         for term in (self.anchor_pos, self.anchor_ori, self.ee_body_pos):
             term.params["start_step"] = SPLIT_APPROACH_ITERATION * STEPS_PER_ITERATION
+
+
+@configclass
+class G1WaypointMimicSplitCurriculumCfg(G1WaypointMimicCurriculumCfg):
+    """The base task's terms, and the pyramid tile of every resetting robot (before its episode is drawn)."""
+
+    pyramid_tiles = CurrTerm(func=mimic_mdp.pyramid_tile_curriculum, params={"command_name": "waypoint"})
 
 
 @configclass
@@ -444,12 +563,25 @@ class G1RoughPerceptionWaypointMimicSplitEnvCfg(G1RoughPerceptionWaypointMimicEn
     rewards: G1WaypointMimicSplitRewardsCfg = G1WaypointMimicSplitRewardsCfg()
     terminations: G1WaypointMimicSplitTerminationsCfg = G1WaypointMimicSplitTerminationsCfg()
     events: G1WaypointMimicSplitEventCfg = G1WaypointMimicSplitEventCfg()
+    curriculum: G1WaypointMimicSplitCurriculumCfg = G1WaypointMimicSplitCurriculumCfg()
+
+    def __post_init__(self):
+        super().__post_init__()
+        # rows are curriculum levels and columns the clip's or curriculum pyramids; see PYRAMID_CURRICULUM
+        curriculum = self.commands.waypoint.pyramid_curriculum
+        generator = self.scene.terrain.terrain_generator
+        generator.curriculum = True
+        generator.num_rows = curriculum.num_rows
+        generator.num_cols = curriculum.num_cols
+        generator.sub_terrains = mimic_mdp.pyramid_curriculum_sub_terrains(curriculum, STAIR_MOTION_FILES[0])
 
 
 @configclass
 class G1RoughPerceptionWaypointMimicSplitEnvCfg_PLAY(G1RoughPerceptionWaypointMimicSplitEnvCfg):
-    """Walk or imitate from a reference start from the first step, without pushes."""
+    """Approach and imitate from the first step (no walk episodes), without pushes."""
 
     def __post_init__(self):
         super().__post_init__()
         _configure_play(self)
+        # skip the walk and split stages: every episode approaches the base, then imitates the clip
+        self.commands.waypoint.approach_start_step = 0

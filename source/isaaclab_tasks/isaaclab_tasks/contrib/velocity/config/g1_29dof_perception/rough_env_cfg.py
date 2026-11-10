@@ -60,7 +60,7 @@ class G1RoughPerceptionEnvCfg(ManagerBasedRLEnvCfg):
         self.video_recorders = [
             VideoRecorderCfg(
                 source="visualizer:newton_gl",
-                output_dir="/workspace/isaaclab/logs/videos",
+                output_dir="logs/videos",
                 video_length=200,
                 video_interval=2000,
             ),

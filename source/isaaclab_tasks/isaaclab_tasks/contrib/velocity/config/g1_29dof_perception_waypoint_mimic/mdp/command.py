@@ -21,14 +21,17 @@ from isaaclab.utils.configclass import configclass
 from isaaclab_tasks.contrib.velocity.config.g1_29dof_goalconditioned_perception.mdp.motion import StairMotionLibrary
 from isaaclab_tasks.contrib.velocity.config.g1_29dof_perception_waypoint.mdp import WaypointCommand, WaypointCommandCfg
 
+from .terrains import PyramidCurriculumCfg, load_clip_boxes, pyramid_tile_geometry
+
 if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedRLEnv
 
-WALK, APPROACH, IMITATE = 0, 1, 2
+WALK, APPROACH, IMITATE, IMITATE_LOOSE = 0, 1, 2, 3
 """Episode modes. ``WALK``: waypoint rewards. ``APPROACH``: the same waypoint without reward.
-``IMITATE``: an ``APPROACH`` episode that reached the waypoint and now tracks the clip."""
+``IMITATE``: an ``APPROACH`` episode that reached the waypoint and now tracks the clip.
+``IMITATE_LOOSE``: the same on a curriculum pyramid, with loose tracking rewards and terminations."""
 
-MODE_NAMES = ("walk", "approach", "imitate")
+MODE_NAMES = ("walk", "approach", "imitate", "imitate_loose")
 
 
 class PyramidMimicCommand(WaypointCommand):
@@ -68,6 +71,7 @@ class PyramidMimicCommand(WaypointCommand):
             lower = (data["terrain_position"][:, :2] - data["terrain_dimension"][:, :2] / 2.0).min(axis=0)
             upper = (data["terrain_position"][:, :2] + data["terrain_dimension"][:, :2] / 2.0).max(axis=0)
         self.pyramid_center = torch.tensor((lower + upper) / 2.0, dtype=torch.float32, device=self.device)
+        self._init_tile_fit(cfg.motion_files[0])
 
         self.mode = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
         self.motion_ids = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
@@ -106,7 +110,56 @@ class PyramidMimicCommand(WaypointCommand):
 
     @property
     def is_imitation(self) -> torch.Tensor:
-        return self.mode == IMITATE
+        return (self.mode == IMITATE) | (self.mode == IMITATE_LOOSE)
+
+    """
+    Tile fit: the clip reference moved onto a pyramid with another top width or step height
+    """
+
+    def _init_tile_fit(self, terrain_motion_file: str):
+        """Per-environment tile geometry, each clip's outward face direction, and the ground under its root."""
+        self.loose = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
+        """Whether the episode runs on a curriculum pyramid; it then imitates in :data:`IMITATE_LOOSE`."""
+        self.tile_delta = torch.zeros(self.num_envs, device=self.device)
+        """Top width change [m] of the environment's pyramid relative to the clip's."""
+        self.tile_scale = torch.ones(self.num_envs, device=self.device)
+        """Step height scale of the environment's pyramid relative to the clip's."""
+        self._ref_shift = torch.zeros(self.num_envs, 3, device=self.device)
+        self.base_pos_w = torch.zeros(self.num_envs, 3, device=self.device)
+        """Fitted clip's first root position [m], at the pyramid base; the base waypoint, also when not observed."""
+        positions, dimensions, ground = load_clip_boxes(terrain_motion_file)
+        tops = positions[:, 2] + dimensions[:, 2] / 2.0 - ground
+        root_xy = self.motion.body_pos_w[:, self.motion_root_index, :2].cpu().numpy()
+        inside = np.all(np.abs(root_xy[:, None, :] - positions[None, :, :2]) <= dimensions[None, :, :2] / 2.0, axis=-1)
+        under = np.where(inside, tops[None, :], 0.0).max(axis=-1)
+        # smooth over each clip so the height fit does not jump at the step edges
+        width = self.cfg.ground_smoothing_frames
+        kernel = np.ones(2 * width + 1) / (2 * width + 1)
+        smoothed = np.zeros_like(under)
+        directions = np.zeros((self.num_motions, 2))
+        center = self.pyramid_center.cpu().numpy()
+        for motion_id in range(self.num_motions):
+            start, length = int(self.motion.starts[motion_id]), int(self.motion.lengths[motion_id])
+            clip = under[start : start + length]
+            smoothed[start : start + length] = np.convolve(np.pad(clip, width, mode="edge"), kernel, mode="valid")
+            # the face the clip climbs: the axis of its start's offset from the pyramid center
+            offset = root_xy[start] - center
+            axis = int(np.argmax(np.abs(offset)))
+            directions[motion_id, axis] = np.sign(offset[axis])
+        self._root_ground = torch.tensor(smoothed, dtype=torch.float32, device=self.device)
+        """Clip pyramid height [m] under the reference root at each packed frame, smoothed."""
+        self._face_direction = torch.tensor(directions, dtype=torch.float32, device=self.device)
+        """Outward normal (XY) of the pyramid face each clip climbs."""
+
+    def _ref_offset(self, frames: torch.Tensor, env_ids: torch.Tensor | slice = slice(None)) -> torch.Tensor:
+        """Offset [m] from the clip pose to the fitted reference at ``frames``, shape (len(env_ids), 3).
+
+        Horizontal: the clip's face moved out by half the top width change. Vertical: the clip pyramid's height under
+        the root, scaled by the step height scale minus one.
+        """
+        offset = self._ref_shift[env_ids].clone()
+        offset[:, 2] = (self.tile_scale[env_ids] - 1.0) * self._root_ground[frames]
+        return offset
 
     """
     Waypoint
@@ -147,7 +200,9 @@ class PyramidMimicCommand(WaypointCommand):
 
     @property
     def body_pos_w(self) -> torch.Tensor:
-        return self.motion.body_pos_w[self._frames] + self._env.scene.env_origins[:, None, :]
+        frames = self._frames
+        offset = self._env.scene.env_origins + self._ref_offset(frames)
+        return self.motion.body_pos_w[frames] + offset[:, None, :]
 
     @property
     def body_quat_w(self) -> torch.Tensor:
@@ -163,7 +218,12 @@ class PyramidMimicCommand(WaypointCommand):
 
     @property
     def anchor_pos_w(self) -> torch.Tensor:
-        return self.motion.body_pos_w[self._frames, self.motion_anchor_index] + self._env.scene.env_origins
+        frames = self._frames
+        return (
+            self.motion.body_pos_w[frames, self.motion_anchor_index]
+            + self._env.scene.env_origins
+            + self._ref_offset(frames)
+        )
 
     @property
     def anchor_quat_w(self) -> torch.Tensor:
@@ -219,17 +279,28 @@ class PyramidMimicCommand(WaypointCommand):
         cfg = self.cfg
         motion_ids = torch.randint(self.num_motions, (count,), device=self.device)
         first = self.motion.frame_indices(motion_ids, torch.zeros_like(motion_ids))
-        start = self.motion.body_pos_w[first, self.motion_root_index] + self._env.scene.env_origins[pending]
+        # the clip moved onto this tile's pyramid: its face out by half the top width change
+        self._ref_shift[pending, :2] = self._face_direction[motion_ids] * (self.tile_delta[pending, None] / 2.0)
+        start = (
+            self.motion.body_pos_w[first, self.motion_root_index]
+            + self._env.scene.env_origins[pending]
+            + self._ref_offset(first, pending)
+        )
         yaw = math_utils.euler_xyz_from_quat(self.motion.body_quat_w[first, self.motion_root_index])[2]
         last = self.motion.frame_indices(motion_ids, self.motion.lengths[motion_ids] - 1)
         self.top_pos_w[pending] = (
-            self.motion.body_pos_w[last, self.motion_root_index] + self._env.scene.env_origins[pending]
+            self.motion.body_pos_w[last, self.motion_root_index]
+            + self._env.scene.env_origins[pending]
+            + self._ref_offset(last, pending)
         )
         top_quat = self.motion.body_quat_w[last, self.motion_root_index]
         self.top_yaw[pending] = math_utils.euler_xyz_from_quat(top_quat)[2]
         self.top_reached[pending] = False
         # spawn behind the clip's start, in its heading frame, on the flat ground around the pyramid
         back = math_utils.sample_uniform(*cfg.spawn_back_range, (count,), self.device)
+        # a wider pyramid moves the start out: keep the spawn within max_spawn_radius of the pyramid center
+        start_radius = (start[:, :2] - self.pyramid_center_w[pending]).norm(dim=-1)
+        back = torch.minimum(back, (cfg.max_spawn_radius - start_radius).clamp_min(0.0))
         lateral = math_utils.sample_uniform(*cfg.spawn_lateral_range, (count,), self.device)
         cos, sin = torch.cos(yaw), torch.sin(yaw)
         spawn = start.clone()
@@ -243,12 +314,19 @@ class PyramidMimicCommand(WaypointCommand):
         self.start_yaw[pending] = math_utils.sample_uniform(*cfg.start_yaw_range, (count,), self.device)
         self.start_at_center[pending] = False
         self.waypoint_pos_w[pending] = start
+        self.base_pos_w[pending] = start
         self.goal_yaw[pending] = yaw
         self.initial_distance[pending] = (start[:, :2] - spawn[:, :2]).norm(dim=-1)
         self.reached[pending] = False
         self.base_reached_now[pending] = False
         imitate = self._env.common_step_counter >= cfg.imitation_start_step
         self.mode[pending] = APPROACH if imitate else WALK
+        if cfg.top_waypoint_only:
+            # one walk straight to the top landing: no base waypoint and no clip
+            self.mode[pending] = WALK
+            self.waypoint_pos_w[pending] = self.top_pos_w[pending]
+            self.goal_yaw[pending] = self.top_yaw[pending]
+            self.initial_distance[pending] = (self.top_pos_w[pending, :2] - spawn[:, :2]).norm(dim=-1)
         self._pending[pending] = False
 
     """
@@ -267,21 +345,30 @@ class PyramidMimicCommand(WaypointCommand):
             )
         print("\n".join(lines))
 
+    def _base_arrival(self, reached: torch.Tensor) -> torch.Tensor:
+        """Whether each episode is at its pyramid base, where an approach starts imitating: the waypoint here."""
+        return reached
+
+    def _on_imitation_start(self, start: torch.Tensor) -> None:
+        """Called with the approach episodes that start imitating on this step, before their mode changes."""
+
     def _update_metrics(self):
         reached = self.waypoint_reached
         if self.cfg.print_interval > 0 and self._env.common_step_counter % self.cfg.print_interval == 0:
             self._print_errors(reached)
         self.top_reached |= self.is_imitation & reached
         # first arrival at the base waypoint of an approach episode; rewarded on the next step, once imitating
-        self.base_reached_now = reached & ~self.reached & (self.mode == APPROACH)
+        # approach episodes start the clip on arriving at the base; _update_command advances it to frame 0
+        start = (self.mode == APPROACH) & self._base_arrival(reached)
+        self.base_reached_now = start
         self.reached |= reached
-        # approach episodes start the clip on reaching the waypoint; _update_command advances it to frame 0.
-        # The waypoint then moves to the clip's end on the top landing.
-        start = (self.mode == APPROACH) & reached
-        self.mode[start] = IMITATE
+        self._on_imitation_start(start)
+        self.mode[start] = torch.where(self.loose[start], IMITATE_LOOSE, IMITATE)
         self.time_steps[start] = -1
-        self.waypoint_pos_w[start] = self.top_pos_w[start]
-        self.goal_yaw[start] = self.top_yaw[start]
+        # the waypoint then moves to the clip's end on the top landing; curriculum episodes keep theirs
+        moved = start & ~self.loose
+        self.waypoint_pos_w[moved] = self.top_pos_w[moved]
+        self.goal_yaw[moved] = self.top_yaw[moved]
         self.metrics["distance"][:] = self.distance_xy
         self.metrics["height_error"][:] = self.height_error.abs()
         self.metrics["heading_error"][:] = self.heading_error.abs()
@@ -334,6 +421,18 @@ class PyramidMimicCommandCfg(WaypointCommandCfg):
 
     start_yaw_range: tuple[float, float] = (-math.pi, math.pi)
 
+    max_spawn_radius: float = 6.4
+    """Largest spawn distance [m] from the pyramid center along the clip's start heading; 0.6 m inside a 14 m tile.
+    It only shortens spawns in front of pyramids wider than the clip's."""
+
+    ground_smoothing_frames: int = 10
+    """Half-width (frames) of the moving average of the clip pyramid height under the root, which lifts the
+    reference on pyramids with other step heights."""
+
+    top_waypoint_only: bool = False
+    """Make every episode a :data:`WALK` episode whose waypoint is the clip's end on the top landing, skipping the
+    base waypoint and imitation (for play)."""
+
 
 class PyramidMimicSplitCommand(PyramidMimicCommand):
     """:class:`PyramidMimicCommand` with separate walk and imitation episodes after the switch.
@@ -371,6 +470,23 @@ class PyramidMimicSplitCommand(PyramidMimicCommand):
         self._walk_end_count = 0
         self._walk_end_cursor = 0
         self.metrics["walk_end_start"] = torch.zeros(self.num_envs, device=self.device)
+        # pyramid curriculum: each robot's level, and the geometry of every tile
+        self.curriculum_level = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
+        """Curriculum level (row) of each robot; it moves only on curriculum episodes."""
+        curriculum = cfg.pyramid_curriculum
+        if curriculum is not None:
+            if curriculum.start_step < cfg.approach_start_step:
+                raise ValueError(
+                    f"The pyramid curriculum starts at control step {curriculum.start_step}, before every episode "
+                    f"approaches the base (approach_start_step={cfg.approach_start_step})."
+                )
+            geometry = [
+                [pyramid_tile_geometry(curriculum, row, col) for col in range(curriculum.num_cols)]
+                for row in range(curriculum.num_rows)
+            ]
+            geometry = torch.tensor(geometry, dtype=torch.float32, device=self.device)
+            self._tile_delta_table, self._tile_scale_table = geometry[..., 0], geometry[..., 1]
+            self.metrics["curriculum_episode"] = torch.zeros(self.num_envs, device=self.device)
 
     def sample_episode(self, env_ids: Sequence[int] | torch.Tensor | slice):
         env_ids = self._as_env_ids(env_ids)
@@ -381,8 +497,15 @@ class PyramidMimicSplitCommand(PyramidMimicCommand):
         self.from_approach[pending] = False
         self.from_walk_end[pending] = False
         step = self._env.common_step_counter
-        if step >= self.cfg.approach_start_step:
-            return  # approach, then imitate, as drawn by the parent
+        # curriculum episodes: the policy's only waypoint is the center of the top landing; the base stays internal
+        loose = pending[self.loose[pending]]
+        if len(loose) > 0:
+            self.waypoint_pos_w[loose, :2] = self.pyramid_center_w[loose]
+            self.waypoint_pos_w[loose, 2] = self.top_pos_w[loose, 2]
+            self.goal_yaw[loose] = self.top_yaw[loose]
+            self.initial_distance[loose] = (self.waypoint_pos_w[loose, :2] - self.start_pos_w[loose, :2]).norm(dim=-1)
+        if step >= self.cfg.approach_start_step or self.cfg.top_waypoint_only:
+            return  # as drawn by the parent: approach, then imitate, or a walk to the top
         self.mode[pending] = WALK
         if step < self.cfg.imitation_start_step:
             return
@@ -402,11 +525,74 @@ class PyramidMimicSplitCommand(PyramidMimicCommand):
         self.start_pos_w[ids] = self.imitation_root_state(ids)[:, :3]
 
     def _update_metrics(self):
-        self._record_walk_end_states()
+        if not self.cfg.top_waypoint_only:  # walks then end on the top, not at the base
+            self._record_walk_end_states()
         approaching = self.mode == APPROACH
         super()._update_metrics()
         self.from_approach |= approaching & self.is_imitation
         self.metrics["walk_end_start"][:] = self.from_walk_end.float()
+        if "curriculum_episode" in self.metrics:
+            self.metrics["curriculum_episode"][:] = self.loose.float()
+
+    def _base_arrival(self, reached: torch.Tensor) -> torch.Tensor:
+        """The waypoint for the earlier regimes; for curriculum episodes, whose waypoint is the top center, the root
+        within the reach radius of the base line of the clip's face (anywhere along it) and the height tolerance of
+        the internal base waypoint."""
+        offset = self.robot.data.root_pos_w.torch - self.base_pos_w
+        outward = (offset[:, :2] * self._face_direction[self.motion_ids]).sum(dim=-1)
+        at_base = (outward < self.cfg.reach_radius) & (offset[:, 2].abs() < self.cfg.height_tolerance)
+        return torch.where(self.loose, at_base, reached)
+
+    def _on_imitation_start(self, start: torch.Tensor) -> None:
+        """Move the clip of starting curriculum episodes sideways along its face onto the robot."""
+        ids = (start & self.loose).nonzero(as_tuple=False).flatten()
+        if len(ids) == 0:
+            return
+        normal = self._face_direction[self.motion_ids[ids]]
+        offset = self.robot.data.root_pos_w.torch[ids, :2] - self.base_pos_w[ids, :2]
+        lateral = offset - (offset * normal).sum(dim=-1, keepdim=True) * normal
+        self._ref_shift[ids, :2] += lateral
+        self.base_pos_w[ids, :2] += lateral
+
+    def assign_tiles(self, env_ids: torch.Tensor) -> None:
+        """Move the robots about to reset onto the tile of their coming episode, before it is sampled.
+
+        Before :attr:`PyramidCurriculumCfg.start_step` every episode runs on a clip pyramid tile. From there, a
+        robot's finished curriculum episode first updates its level: up (with
+        :attr:`PyramidCurriculumCfg.promotion_probability`) when it reached the top waypoint, down when it neither
+        did nor got past :attr:`PyramidCurriculumCfg.demotion_phase` of the clip. Then each coming episode runs the
+        curriculum with :attr:`PyramidCurriculumCfg.curriculum_probability`, on its level or, with
+        :attr:`PyramidCurriculumCfg.replay_probability`, on a random lower one, in a random curriculum column;
+        the others run the earlier regime on a random clip pyramid tile.
+        """
+        cur = self.cfg.pyramid_curriculum
+        env_ids = self._as_env_ids(env_ids)
+        count = len(env_ids)
+        if cur is None or count == 0:
+            return
+        rand = lambda: torch.rand(count, device=self.device)  # noqa: E731
+        curriculum = torch.zeros(count, dtype=torch.bool, device=self.device)
+        if self._env.common_step_counter >= cur.start_step:
+            finished = self.loose[env_ids]
+            top = self.top_reached[env_ids]
+            up = finished & top & (rand() < cur.promotion_probability)
+            down = finished & ~top & (self.phase[env_ids] < cur.demotion_phase)
+            level = self.curriculum_level[env_ids] + up.long() - down.long()
+            self.curriculum_level[env_ids] = level.clamp(0, cur.num_rows - 1)
+            curriculum = rand() < cur.curriculum_probability
+        level = self.curriculum_level[env_ids]
+        replay = rand() < cur.replay_probability
+        curriculum_row = torch.where(replay, (rand() * (level + 1)).long(), level)
+        curriculum_col = cur.num_clip_cols + (rand() * (cur.num_cols - cur.num_clip_cols)).long()
+        rows = torch.where(curriculum, curriculum_row, (rand() * cur.num_rows).long())
+        cols = torch.where(curriculum, curriculum_col, (rand() * cur.num_clip_cols).long())
+        terrain = self._env.scene.terrain
+        terrain.terrain_levels[env_ids] = rows
+        terrain.terrain_types[env_ids] = cols
+        terrain.env_origins[env_ids] = terrain.terrain_origins[rows, cols]
+        self.tile_delta[env_ids] = self._tile_delta_table[rows, cols]
+        self.tile_scale[env_ids] = self._tile_scale_table[rows, cols]
+        self.loose[env_ids] = curriculum
 
     def _record_walk_end_states(self):
         """Store the state of every walk episode that first reaches the base waypoint on this step."""
@@ -485,7 +671,9 @@ class PyramidMimicSplitCommand(PyramidMimicCommand):
         root = self.motion_root_index
         return torch.cat(
             (
-                self.motion.body_pos_w[frames, root] + self._env.scene.env_origins[env_ids],
+                self.motion.body_pos_w[frames, root]
+                + self._env.scene.env_origins[env_ids]
+                + self._ref_offset(frames, env_ids),
                 self.motion.body_quat_w[frames, root],
                 self.motion.body_lin_vel_w[frames, root],
                 self.motion.body_ang_vel_w[frames, root],
@@ -521,3 +709,7 @@ class PyramidMimicSplitCommandCfg(PyramidMimicCommandCfg):
 
     walk_end_min_states: int = 64
     """Recorded states needed before they are used; until then the episode starts on the clip's first pose."""
+
+    pyramid_curriculum: PyramidCurriculumCfg | None = None
+    """Tiles of the pyramid curriculum regime, assigned by :meth:`PyramidMimicSplitCommand.assign_tiles`; the
+    terrain generator must be built from the same configuration. None keeps every episode on the clip's pyramid."""

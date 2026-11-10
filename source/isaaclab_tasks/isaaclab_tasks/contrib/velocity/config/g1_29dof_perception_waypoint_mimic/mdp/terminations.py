@@ -9,7 +9,8 @@ Each threshold is ``threshold_start`` when imitation begins (the command's ``imi
 linearly to ``threshold`` over the next ``decay_steps`` control steps of training, then stays there. An explicit
 ``start_step`` moves the start; before it, the threshold is ``threshold``. The schedule
 follows the environment's step counter, which restarts at zero on every launch. All terms are false outside
-imitation.
+imitation; ``modes`` selects the imitation modes a term applies to (strict :data:`~.command.IMITATE` by
+default, or the curriculum's loose :data:`~.command.IMITATE_LOOSE`).
 """
 
 from __future__ import annotations
@@ -19,6 +20,8 @@ from typing import TYPE_CHECKING
 import torch
 
 from isaaclab.utils.math import quat_apply_inverse
+
+from .command import IMITATE
 
 if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedRLEnv
@@ -55,13 +58,12 @@ def bad_anchor_height_decaying(
     threshold: float,
     decay_steps: int,
     start_step: int | None = None,
+    modes: tuple[int, ...] = (IMITATE,),
 ) -> torch.Tensor:
     """Anchor height error [m] from the reference above the current threshold."""
     command: PyramidMimicCommand = env.command_manager.get_term(command_name)
     error = (command.anchor_pos_w[:, 2] - command.robot_anchor_pos_w[:, 2]).abs()
-    return (
-        error > _threshold(env, command, threshold_start, threshold, decay_steps, start_step)
-    ) & command.is_imitation
+    return (error > _threshold(env, command, threshold_start, threshold, decay_steps, start_step)) & command.mask(modes)
 
 
 def bad_anchor_tilt_decaying(
@@ -71,6 +73,7 @@ def bad_anchor_tilt_decaying(
     threshold: float,
     decay_steps: int,
     start_step: int | None = None,
+    modes: tuple[int, ...] = (IMITATE,),
 ) -> torch.Tensor:
     """Difference of the anchor-frame gravity Z components between reference and robot above the threshold."""
     command: PyramidMimicCommand = env.command_manager.get_term(command_name)
@@ -79,7 +82,7 @@ def bad_anchor_tilt_decaying(
     reference = quat_apply_inverse(command.anchor_quat_w, gravity)[:, 2]
     robot = quat_apply_inverse(command.robot_anchor_quat_w, gravity)[:, 2]
     limit = _threshold(env, command, threshold_start, threshold, decay_steps, start_step)
-    return ((reference - robot).abs() > limit) & command.is_imitation
+    return ((reference - robot).abs() > limit) & command.mask(modes)
 
 
 def bad_body_height_decaying(
@@ -90,10 +93,11 @@ def bad_body_height_decaying(
     decay_steps: int,
     body_names: list[str],
     start_step: int | None = None,
+    modes: tuple[int, ...] = (IMITATE,),
 ) -> torch.Tensor:
     """Height error [m] of any of ``body_names`` from the anchor-aligned reference above the current threshold."""
     command: PyramidMimicCommand = env.command_manager.get_term(command_name)
     ids = [command.cfg.body_names.index(name) for name in body_names]
     error = (command.body_pos_relative_w[:, ids, 2] - command.robot_body_pos_w[:, ids, 2]).abs()
     limit = _threshold(env, command, threshold_start, threshold, decay_steps, start_step)
-    return (error > limit).any(dim=-1) & command.is_imitation
+    return (error > limit).any(dim=-1) & command.mask(modes)
