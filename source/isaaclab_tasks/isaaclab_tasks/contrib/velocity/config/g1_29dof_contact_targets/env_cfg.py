@@ -10,6 +10,7 @@ each foot's and hand's current or next contact in the clip; the rewards are the 
 regularization terms (no velocity tracking) and rewards for stepping toward and onto the clip's footsteps.
 """
 
+import os
 from pathlib import Path
 
 from isaaclab_visualizers.newton import NewtonGLVisualizerCfg
@@ -32,23 +33,27 @@ from ..g1_29dof_rigid.env_cfg.observation_cfg import CriticHistoryCfg, PolicyHis
 from ..g1_29dof_rigid.rough_env_cfg import G1RoughEnvCfg
 from . import mdp
 
-WALK_MOTION_DIR = Path(__file__).resolve().parent / "data" / "motion_library"
+WALK_MOTION_DIR = Path(os.environ.get("LAFAN_MOTION_DIR", "~/motion_library/data/lafan")).expanduser()
+"""Local LAFAN1 G1 clips built with motion_library (``data/lafan/<name>/motion.npz``). LAFAN1 is CC BY-NC-ND 4.0,
+so the clips are built locally and not stored in this repository; set ``LAFAN_MOTION_DIR`` to use another folder."""
 
-WALK_MOTION_FILES = [str(WALK_MOTION_DIR / f"kimodo_ramp_seed{seed}.npz") for seed in (45, 46, 47)] + [
-    str(WALK_MOTION_DIR / f"kimodo_platform_seed{seed}.npz") for seed in (44, 45)
+WALK_MOTION_FILES = [
+    str(WALK_MOTION_DIR / f"lafan_walk_{i:02d}" / "motion.npz") for i in (0, 1, 2, 3, 4, 5, 7, 8, 9, 11, 12)
 ]
-"""Walking clips from motion_library: up a 0.1 m ramp, and onto a 0.15 m platform."""
+"""Flat-ground walking clips: 6 s windows of steady forward LAFAN1 walking (0.6 to 1 m/s, under 35 degrees of
+turning) retargeted to the box-foot G1. Clips 6 and 10 are left out: a heel-to-toe roll hides one of their
+footsteps from the contact detection."""
 
-TEST_MOTION_FILES = [STAIR_MOTION_FILES[3], WALK_MOTION_FILES[2]]
+TEST_MOTION_FILES = [STAIR_MOTION_FILES[3], WALK_MOTION_FILES[7]]
 """Held-out clips, never drawn in training and the only ones in ``-Play``: the pyramid climbed from its fourth side
-(``motion_yaw_270``) and the third ramp walk (``kimodo_ramp_seed47``)."""
+(``motion_yaw_270``) and a straight walk (``lafan_walk_08``)."""
 
 TRAIN_STAIR_FILES = [path for path in STAIR_MOTION_FILES if path not in TEST_MOTION_FILES]
 TRAIN_WALK_FILES = [path for path in WALK_MOTION_FILES if path not in TEST_MOTION_FILES]
 TEST_WALK_FILES = [path for path in WALK_MOTION_FILES if path in TEST_MOTION_FILES]
 
 MOTION_FILES = TRAIN_STAIR_FILES + TRAIN_WALK_FILES
-"""Training clips: three pyramid stair clips (approached from three sides), then four walking clips; terrain column
+"""Training clips: three pyramid stair clips (approached from three sides), then ten walking clips; terrain column
 ``i`` holds clip ``i``."""
 
 MOTION_WEIGHTS = [1.0 / len(TRAIN_STAIR_FILES)] * len(TRAIN_STAIR_FILES) + [1.0 / len(TRAIN_WALK_FILES)] * len(

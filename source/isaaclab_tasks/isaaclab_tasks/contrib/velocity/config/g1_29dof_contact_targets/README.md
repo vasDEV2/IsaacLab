@@ -6,7 +6,7 @@ hand contacts of motion clips, on rigid terrain and without perception. It reuse
 
 ## Clips and terrain
 
-Nine clips. Seven train, drawn per episode with stairs and walking in equal shares (`MOTION_WEIGHTS` in
+Fifteen clips. Thirteen train, drawn per episode with stairs and walking in equal shares (`MOTION_WEIGHTS` in
 `env_cfg.py`); two are held out as a test set (`TEST_MOTION_FILES`), never drawn in training and the only clips in
 `-Play`:
 
@@ -14,15 +14,23 @@ Nine clips. Seven train, drawn per episode with stairs and walking in equal shar
 | --- | --- | --- |
 | `motion_yaw_000`, `_090`, `_180` | Pyramid stairs of the goal-conditioned task, approached from three sides, 7.5 s | Train |
 | `motion_yaw_270` | The same pyramid climb from the fourth side | Test |
-| `kimodo_ramp_seed45`, `_seed46` | Walk up a 0.1 m ramp, 6 s ([`data/motion_library`](data/motion_library/README.md)) | Train |
-| `kimodo_ramp_seed47` | Walk up the ramp with a different gait (more, shorter steps) | Test |
-| `kimodo_platform_seed44`, `_seed45` | Walk onto a 0.15 m platform, 4 s | Train |
+| `lafan_walk_00`–`_05`, `_07`, `_09`, `_11`, `_12` | Steady forward LAFAN1 walking on flat ground, 6 s | Train |
+| `lafan_walk_08` | A straight LAFAN1 walk | Test |
+
+The walking clips are 6 s windows of the public [Unitree G1 retargeting of LAFAN1](https://huggingface.co/datasets/lvhaidong/LAFAN1_Retargeting_Dataset).
+They were picked for steady forward walking at standing height, at 0.6–1 m/s, with under 35° of turning and within
+a 7 m extent. They start mid-stride; the feet land 0.5 m apart (median; 0.33–0.70 m for 80% of footsteps). LAFAN1 is CC BY-NC-ND 4.0, so the clips
+are not in this repository. Build them locally with [motion_library](https://github.com/jnskkmhr/motion_library)'s
+LAFAN importer and `export_mimic.py` (box-foot G1, 50 Hz) into `~/motion_library/data/lafan/lafan_walk_NN/motion.npz`,
+or set `LAFAN_MOTION_DIR` to the folder holding them. Clips `_06` and `_10` are left out: a heel-to-toe roll hides
+one of their footsteps from the contact detection below.
 
 `IsaacContrib-Velocity-G1-29dof-Rigid-ContactTargets-Walk` (and `-Walk-Play`) is the same task on the walking clips
-only: the four training walking clips drawn uniformly, and `kimodo_ramp_seed47` alone in `-Walk-Play`. Its runs log
+only: the ten training walking clips drawn uniformly, and `lafan_walk_08` alone in `-Walk-Play`. Its runs log
 to `g1_29dof_rigid_contact_targets_walk_ppo`.
 
-The terrain has one column per clip, holding that clip's boxes; at reset each robot moves onto its clip's column
+The terrain has one column per clip, holding that clip's boxes (flat ground, with the root path centered, for the
+walking clips); at reset each robot moves onto its clip's column
 and starts on the clip's first pose, with ±0.05 rad joint noise. The clip then plays at the robot's pace
 (`wait_for_contact`): it does not land the current footstep (see [Foot targets](#foot-targets)) until the robot's
 stepping foot is down (contact force above 5 N) within 8 cm (`reach_radius`) of its target; when the robot lifts
@@ -38,7 +46,8 @@ Contacts are measured from each clip's geometry when it is loaded (`mdp/motion.p
 least two corners of its foot box are within 1 cm of the terrain and its ankle moves slower than 0.3 m/s (dragged
 swing feet do not count); a hand when its sphere is within 1 cm and slower than 0.3 m/s. Contacts and gaps shorter
 than three frames are dropped. On the clips that carry contact labels this agrees with them on 84% (stairs) and
-89–94% (platform) of the frames. None of the nine clips uses the hands.
+89–94% (platform) of the frames. None of the clips uses the hands; the walking clips have no hand spheres, so their
+hand bodies' origins stand in for them.
 
 ## Foot targets
 

@@ -198,8 +198,13 @@ class ContactMotionLibrary:
                 # contact bodies: the feet's ankle roll links and the hand spheres
                 frames = data["joint_pos"].shape[0]
                 corners = data["foot_box_corners_w"].reshape(frames, 2, -1, 3)
-                hands = data["hand_sphere_centers_w"].reshape(frames, 2, -1, 3)[:, :, 0]
-                radii = np.broadcast_to(np.asarray(data["hand_sphere_radii"], dtype=float).reshape(-1), (2,))
+                if "hand_sphere_centers_w" in data:
+                    hands = data["hand_sphere_centers_w"].reshape(frames, 2, -1, 3)[:, :, 0]
+                    radii = np.broadcast_to(np.asarray(data["hand_sphere_radii"], dtype=float).reshape(-1), (2,))
+                else:
+                    # clips exported without hand spheres: the hand bodies' origins, touching only on contact
+                    hand_bodies = [clip_bodies.index(f"{side}_rubber_hand") for side in ("left", "right")]
+                    hands, radii = data["body_pos_w"][:, hand_bodies], np.zeros(2)
                 body_pos = np.concatenate((data["body_pos_w"][:, feet], hands), axis=1)
                 # a flat, planted foot: two corners on the terrain and a slow ankle; dragged swing feet are not
                 foot_touch = (terrain_distance(data, corners) < contact_margin).sum(axis=-1) >= 2
