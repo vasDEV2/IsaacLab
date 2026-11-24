@@ -9,7 +9,8 @@ import gymnasium as gym
 
 # stair and walking clips, and the walking clips only
 for task, cfg_name, runner in (("", "", ""), ("-Walk", "Walk", "Walk")):
-    for suffix, cfg_suffix in (("", ""), ("-Play", "_PLAY")):
+    # -Play replays the held-out (out-of-distribution) clips, -Play-Train training clips
+    for suffix, cfg_suffix in (("", ""), ("-Play", "_PLAY"), ("-Play-Train", "_PLAY_TRAIN")):
         gym.register(
             id=f"IsaacContrib-Velocity-G1-29dof-Rigid-ContactTargets{task}{suffix}",
             entry_point="isaaclab.envs:ManagerBasedRLEnv",

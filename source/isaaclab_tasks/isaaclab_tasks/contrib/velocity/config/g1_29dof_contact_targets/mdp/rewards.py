@@ -86,3 +86,20 @@ def step_foot_progress(
     speed = (velocity * offset).sum(dim=-1) / distance.clamp(min=1e-6)
     active = ~command.in_contact[:, foot] & (distance > deadband)
     return speed.clamp(-max_speed, max_speed) * active.float()
+
+
+def base_overspeed_l2(env: ManagerBasedRLEnv, command_name: str, margin: float) -> torch.Tensor:
+    """Squared horizontal base speed [m/s] above the clip's root speed plus ``margin``, else zero.
+
+    The clips walk at up to 1 m/s, so only speed beyond what the clip moves at is penalized: lunging and rushing,
+    not walking along with the clip.
+    """
+    command: MotionContactCommand = env.command_manager.get_term(command_name)
+    speed = command.robot.data.root_lin_vel_w.torch[:, :2].norm(dim=-1)
+    clip_speed = command.command[:, :2].norm(dim=-1)
+    return (speed - clip_speed - margin).clamp(min=0.0).square()
+
+
+def base_ang_vel_l2(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")) -> torch.Tensor:
+    """Squared base angular velocity [rad/s] about all three axes: how fast the base's orientation changes."""
+    return env.scene[asset_cfg.name].data.root_ang_vel_b.torch.square().sum(dim=-1)

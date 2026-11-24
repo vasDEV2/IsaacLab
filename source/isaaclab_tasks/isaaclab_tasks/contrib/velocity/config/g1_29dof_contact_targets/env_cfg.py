@@ -52,6 +52,13 @@ TRAIN_STAIR_FILES = [path for path in STAIR_MOTION_FILES if path not in TEST_MOT
 TRAIN_WALK_FILES = [path for path in WALK_MOTION_FILES if path not in TEST_MOTION_FILES]
 TEST_WALK_FILES = [path for path in WALK_MOTION_FILES if path in TEST_MOTION_FILES]
 
+PLAY_TRAIN_FILES = [TRAIN_STAIR_FILES[0], TRAIN_WALK_FILES[0]]
+"""Training clips replayed in ``-Play-Train`` (in distribution): the pyramid climbed from its first side
+(``motion_yaw_000``) and ``lafan_walk_00``."""
+
+PLAY_TRAIN_WALK_FILES = [TRAIN_WALK_FILES[0]]
+"""The training walking clip replayed in ``-Walk-Play-Train`` (``lafan_walk_00``)."""
+
 MOTION_FILES = TRAIN_STAIR_FILES + TRAIN_WALK_FILES
 """Training clips: three pyramid stair clips (approached from three sides), then ten walking clips; terrain column
 ``i`` holds clip ``i``."""
@@ -115,6 +122,10 @@ class G1ContactTargetRewardsCfg(G1RewardsRoughCfg):
     track_lin_vel_xy = None
     track_ang_vel_z = None
     track_heading = None
+
+    # base motion: speed beyond the clip's (0.2 m/s of slack), and fast changes of the base's orientation
+    base_overspeed = RewTerm(func=mdp.base_overspeed_l2, weight=-2.0, params={"command_name": "motion", "margin": 0.2})
+    base_ang_vel = RewTerm(func=mdp.base_ang_vel_l2, weight=-0.5)
 
     left_foot_contact_target = RewTerm(
         func=mdp.foot_contact_target_exp,
@@ -288,3 +299,21 @@ class G1ContactTargetWalkEnvCfg_PLAY(G1ContactTargetWalkEnvCfg):
     def __post_init__(self):
         super().__post_init__()
         _configure_play(self, TEST_WALK_FILES)
+
+
+@configclass
+class G1ContactTargetEnvCfg_PLAY_TRAIN(G1ContactTargetEnvCfg):
+    """Training clips (:data:`PLAY_TRAIN_FILES`), to compare with the held-out clips of ``-Play``."""
+
+    def __post_init__(self):
+        super().__post_init__()
+        _configure_play(self, PLAY_TRAIN_FILES)
+
+
+@configclass
+class G1ContactTargetWalkEnvCfg_PLAY_TRAIN(G1ContactTargetWalkEnvCfg):
+    """A training walking clip (:data:`PLAY_TRAIN_WALK_FILES`), to compare with the held-out clip of ``-Walk-Play``."""
+
+    def __post_init__(self):
+        super().__post_init__()
+        _configure_play(self, PLAY_TRAIN_WALK_FILES)

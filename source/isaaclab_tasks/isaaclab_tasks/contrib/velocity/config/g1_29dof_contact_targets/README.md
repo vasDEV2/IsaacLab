@@ -69,10 +69,16 @@ negates the lateral coordinate.
 
 ## Rewards
 
-The rigid task's rough-terrain rewards without `track_lin_vel_xy`, `track_ang_vel_z`, `track_heading`, and
-`foot_clearance`. The terms that tell standing from walking (`joint_deviation`, `feet_air_time`, `break_contact`,
-`no_fly`, `contact_impulse`, `standing_foot_motion`) read the clip's root velocity as their command. Per foot, on its
-ankle roll link:
+The rigid task's rough-terrain rewards without `track_lin_vel_xy`, `track_ang_vel_z`, and `track_heading`. The terms
+that tell standing from walking (`joint_deviation`, `feet_air_time`, `break_contact`, `no_fly`, `contact_impulse`,
+`standing_foot_motion`, `foot_clearance`) read the clip's root velocity as their command. Two penalties on the base:
+
+- `base_overspeed` (weight -2.0): the squared horizontal base speed above the clip's root speed plus 0.2 m/s, so
+  rushing or lunging is penalized but walking along with the clip is not.
+- `base_ang_vel` (weight -0.5): the squared base angular velocity about all three axes, i.e. how fast the base's
+  orientation changes (on top of the rigid task's `ang_vel_xy_l2`, weight -0.05).
+
+Per foot, on its ankle roll link:
 
 - `left/right_foot_contact_target` (weight 3.0): while that foot holds its target and the clip is not waiting, the
   mean of `exp(-d² / 0.1²)` and `exp(-d² / 0.3²)` of its distance `d` to the target (1 on the target, 0.88 at
@@ -94,3 +100,19 @@ uv run --with wandb isaaclab train --rl_library rsl_rl \
 Runs log to `g1_29dof_rigid_contact_targets_ppo`. In `-Play`, the viewer looks at env 0's clip terrain, and the
 **Live Plots** section of its sidebar plots env 0's weighted reward terms (and the episode reward) every step. For the walking-only task, pass
 `--task IsaacContrib-Velocity-G1-29dof-Rigid-ContactTargets-Walk`.
+
+## Play
+
+Two Play variants each, with the same Play settings (the clip waits indefinitely, no pushes or observation noise):
+
+| Task | Clips |
+| --- | --- |
+| `...-ContactTargets-Play` | Held out, out of distribution: `motion_yaw_270` and `lafan_walk_08` |
+| `...-ContactTargets-Play-Train` | Training clips, in distribution: `motion_yaw_000` and `lafan_walk_00` |
+| `...-ContactTargets-Walk-Play` | Held out: `lafan_walk_08` |
+| `...-ContactTargets-Walk-Play-Train` | A training clip: `lafan_walk_00` |
+
+```bash
+uv run isaaclab play --rl_library rsl_rl \
+    --task IsaacContrib-Velocity-G1-29dof-Rigid-ContactTargets-Walk-Play-Train --checkpoint latest
+```
