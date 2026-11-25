@@ -13,6 +13,7 @@ from .rewards import (
     base_ang_vel_l2,
     base_overspeed_l2,
     foot_contact_target_exp,
+    foot_orientation_l2,
     step_foot_progress,
     step_foot_target_exp,
 )

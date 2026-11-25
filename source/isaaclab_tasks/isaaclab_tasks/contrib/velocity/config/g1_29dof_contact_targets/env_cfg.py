@@ -127,6 +127,26 @@ class G1ContactTargetRewardsCfg(G1RewardsRoughCfg):
     base_overspeed = RewTerm(func=mdp.base_overspeed_l2, weight=-2.0, params={"command_name": "motion", "margin": 0.2})
     base_ang_vel = RewTerm(func=mdp.base_ang_vel_l2, weight=-0.5)
 
+    # ankle orientation: each ankle roll link's angle from the clip's at the same frame
+    left_foot_orientation = RewTerm(
+        func=mdp.foot_orientation_l2,
+        weight=-1.0,
+        params={
+            "command_name": "motion",
+            "foot": 0,
+            "asset_cfg": SceneEntityCfg("robot", body_names="left_ankle_roll_link"),
+        },
+    )
+    right_foot_orientation = RewTerm(
+        func=mdp.foot_orientation_l2,
+        weight=-1.0,
+        params={
+            "command_name": "motion",
+            "foot": 1,
+            "asset_cfg": SceneEntityCfg("robot", body_names="right_ankle_roll_link"),
+        },
+    )
+
     left_foot_contact_target = RewTerm(
         func=mdp.foot_contact_target_exp,
         weight=3.0,

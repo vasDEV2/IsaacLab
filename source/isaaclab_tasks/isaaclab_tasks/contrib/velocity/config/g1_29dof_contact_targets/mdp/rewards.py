@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING
 
 import torch
 
+import isaaclab.utils.math as math_utils
 from isaaclab.managers import SceneEntityCfg
 
 if TYPE_CHECKING:
@@ -103,3 +104,17 @@ def base_overspeed_l2(env: ManagerBasedRLEnv, command_name: str, margin: float) 
 def base_ang_vel_l2(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")) -> torch.Tensor:
     """Squared base angular velocity [rad/s] about all three axes: how fast the base's orientation changes."""
     return env.scene[asset_cfg.name].data.root_ang_vel_b.torch.square().sum(dim=-1)
+
+
+def foot_orientation_l2(
+    env: ManagerBasedRLEnv, command_name: str, foot: int, asset_cfg: SceneEntityCfg
+) -> torch.Tensor:
+    """Squared angle [rad^2] between one robot ankle roll link's orientation and the clip's at the same frame.
+
+    ``foot`` is 0 (left) or 1 (right) and ``asset_cfg`` selects that robot foot's body. Applied in stance and swing,
+    so the ankle follows the clip's roll, pitch, and yaw: flat on planted steps, the clip's toe-off and heel-strike
+    angles in between.
+    """
+    command: MotionContactCommand = env.command_manager.get_term(command_name)
+    quat = command.robot.data.body_quat_w.torch[:, asset_cfg.body_ids[0]]
+    return math_utils.quat_error_magnitude(quat, command.motion.foot_quat[command.frames, foot]).square()

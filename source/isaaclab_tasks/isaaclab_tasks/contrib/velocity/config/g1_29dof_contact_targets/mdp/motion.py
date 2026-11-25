@@ -171,7 +171,9 @@ class ContactMotionLibrary:
         if not motion_files:
             raise ValueError("At least one motion file is required.")
         keys = ("joint_pos", "joint_vel", "root_pos", "root_quat", "root_lin_vel", "root_ang_vel", "body_pos")
-        arrays = {key: [] for key in (*keys, "target", "contact", "step_foot", "step_touchdown", "step_index")}
+        arrays = {
+            key: [] for key in (*keys, "foot_quat", "target", "contact", "step_foot", "step_touchdown", "step_index")
+        }
         lengths = []
         for path in motion_files:
             if not os.path.isfile(path):
@@ -195,6 +197,7 @@ class ContactMotionLibrary:
                 arrays["root_quat"].append(data["body_quat_w"][:, root])
                 arrays["root_lin_vel"].append(data["body_lin_vel_w"][:, root])
                 arrays["root_ang_vel"].append(data["body_ang_vel_w"][:, root])
+                arrays["foot_quat"].append(data["body_quat_w"][:, feet])
                 # contact bodies: the feet's ankle roll links and the hand spheres
                 frames = data["joint_pos"].shape[0]
                 corners = data["foot_box_corners_w"].reshape(frames, 2, -1, 3)
@@ -239,6 +242,8 @@ class ContactMotionLibrary:
         """Root linear velocities [m/s] in the clip frame. Shape is (frames, 3)."""
         self.root_ang_vel = pack("root_ang_vel")
         """Root angular velocities [rad/s] in the clip frame. Shape is (frames, 3)."""
+        self.foot_quat = pack("foot_quat")
+        """Foot (ankle roll link) orientations (x, y, z, w) in the clip frame. Shape is (frames, 2, 4)."""
         self.body_pos = pack("body_pos")
         """Contact body positions [m] in the clip frame. Shape is (frames, 4, 3)."""
         self.contact_target = pack("target")

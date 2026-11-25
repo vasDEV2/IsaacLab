@@ -78,6 +78,11 @@ that tell standing from walking (`joint_deviation`, `feet_air_time`, `break_cont
 - `base_ang_vel` (weight -0.5): the squared base angular velocity about all three axes, i.e. how fast the base's
   orientation changes (on top of the rigid task's `ang_vel_xy_l2`, weight -0.05).
 
+Per foot, a penalty on the ankle's orientation:
+
+- `*_foot_orientation` (weight -1.0): the squared angle [rad^2] between the robot's ankle roll link and the clip's
+  at the same frame, in stance and swing, so the ankle follows the clip's roll, pitch, yaw, toe-off and heel strike.
+
 Per foot, on its ankle roll link:
 
 - `left/right_foot_contact_target` (weight 3.0): while that foot holds its target and the clip is not waiting, the
