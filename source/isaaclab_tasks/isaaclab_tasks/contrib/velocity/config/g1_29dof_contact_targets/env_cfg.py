@@ -115,7 +115,7 @@ class G1ContactTargetRewardsCfg(G1RewardsRoughCfg):
     """The rigid task's rough-terrain rewards without velocity tracking, and per-foot contact target rewards.
 
     The gait terms that tell standing from walking read the clip's root velocity (the ``motion`` command). Each foot
-    is paid for holding its target (1 on target, 0.88 at 5 cm, 0.63 at 10 cm) and, while it steps, for being near
+    is paid for holding its target (1 on target, 0.63 at 5 cm, 0.33 at 10 cm) and, while it steps, for being near
     its landing and for moving toward it.
     """
 
@@ -153,8 +153,8 @@ class G1ContactTargetRewardsCfg(G1RewardsRoughCfg):
         params={
             "command_name": "motion",
             "foot": 0,
-            "std": 0.1,
-            "coarse_std": 0.3,
+            "std": 0.05,
+            "coarse_std": 0.15,
             "asset_cfg": SceneEntityCfg("robot", body_names="left_ankle_roll_link"),
         },
     )
@@ -164,7 +164,7 @@ class G1ContactTargetRewardsCfg(G1RewardsRoughCfg):
         params={
             "command_name": "motion",
             "foot": 0,
-            "std": 0.5,
+            "std": 0.25,
             "asset_cfg": SceneEntityCfg("robot", body_names="left_ankle_roll_link"),
         },
     )
@@ -183,8 +183,8 @@ class G1ContactTargetRewardsCfg(G1RewardsRoughCfg):
         params={
             "command_name": "motion",
             "foot": 1,
-            "std": 0.1,
-            "coarse_std": 0.3,
+            "std": 0.05,
+            "coarse_std": 0.15,
             "asset_cfg": SceneEntityCfg("robot", body_names="right_ankle_roll_link"),
         },
     )
@@ -194,7 +194,7 @@ class G1ContactTargetRewardsCfg(G1RewardsRoughCfg):
         params={
             "command_name": "motion",
             "foot": 1,
-            "std": 0.5,
+            "std": 0.25,
             "asset_cfg": SceneEntityCfg("robot", body_names="right_ankle_roll_link"),
         },
     )
